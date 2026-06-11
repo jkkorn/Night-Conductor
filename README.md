@@ -93,8 +93,7 @@ python3 -m autoconduct install    # launchd agent, ticks every 10 min
 
 ## About
 
-Made with ❤️ in Brazil by [Jonathan Korn](https://www.linkedin.com/in/jkkorn) —
-I write about product and startups on [Substack](https://jonathankorn.substack.com).
+Made with ❤️ in Brazil by [Jonathan Korn](https://www.linkedin.com/in/jkkorn).
 Built because I love [Conductor](https://conductor.build) and kept hitting my
 limits at midnight.
 

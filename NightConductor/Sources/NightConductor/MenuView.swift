@@ -1,10 +1,9 @@
 import ServiceManagement
 import SwiftUI
 
-// Confirm these are right — they ship inside the app's About line.
+// Confirm this is right — it ships inside the app's About line.
 enum AboutLinks {
     static let linkedIn = URL(string: "https://www.linkedin.com/in/jkkorn")!
-    static let substack = URL(string: "https://jonathankorn.substack.com")!
 }
 
 struct MenuView: View {
@@ -190,8 +189,6 @@ extension MenuView {
             Spacer()
             Text("Made with ❤️ in Brazil by")
             Link("Jonathan Korn", destination: AboutLinks.linkedIn)
-            Text("·")
-            Link("Substack", destination: AboutLinks.substack)
             Spacer()
         }
         .font(.caption2)

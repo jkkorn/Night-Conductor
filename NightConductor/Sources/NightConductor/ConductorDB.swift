@@ -14,32 +14,41 @@ enum ConductorDBError: LocalizedError {
 }
 
 /// Read-only scanner for Conductor's session database. A session is
-/// "stalled" when its most recent message is a 429 usage-limit error —
-/// it died at the limit and nothing has happened since.
+/// "stalled" when its most recent *result-type* message is a 429
+/// usage-limit error. (After a 429, Conductor appends synthetic assistant
+/// and system messages, so the error is rarely the literal last row.)
 enum ConductorDB {
     static var defaultPath: String {
         NSHomeDirectory() + "/Library/Application Support/com.conductor.app/conductor.db"
     }
 
-    private static let lastMessageQuery = """
-    WITH last_msgs AS (
+    /// Don't resurrect sessions abandoned at a limit ages ago.
+    static let maxStallAge: TimeInterval = 48 * 3600
+
+    private static let lastResultQuery = """
+    WITH results AS (
         SELECT session_id, content, created_at,
                ROW_NUMBER() OVER (
-                   PARTITION BY session_id ORDER BY created_at DESC
+                   PARTITION BY session_id ORDER BY created_at DESC, id DESC
                ) AS rn
         FROM session_messages
+        WHERE json_valid(content)
+          AND json_extract(content, '$.type') = 'result'
     )
     SELECT s.id, s.claude_session_id, s.title, w.workspace_path,
-           lm.content, lm.created_at
-    FROM last_msgs lm
-    JOIN sessions s ON s.id = lm.session_id
+           r.content, r.created_at
+    FROM results r
+    JOIN sessions s ON s.id = r.session_id
     JOIN workspaces w ON w.id = s.workspace_id
-    WHERE lm.rn = 1
-      AND w.state = 'active'
-      AND lm.content LIKE '%api_error_status%'
+    WHERE r.rn = 1
+      AND w.state != 'archived'
+      AND json_extract(r.content, '$.is_error') = 1
+      AND json_extract(r.content, '$.api_error_status') = 429
     """
 
-    static func findStalledSessions(dbPath: String = defaultPath) throws -> [StalledSession] {
+    static func findStalledSessions(
+        dbPath: String = defaultPath, now: Date = Date()
+    ) throws -> [StalledSession] {
         guard FileManager.default.fileExists(atPath: dbPath) else {
             throw ConductorDBError.notFound(dbPath)
         }
@@ -50,21 +59,21 @@ enum ConductorDB {
         defer { sqlite3_close(db) }
 
         var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(db, lastMessageQuery, -1, &statement, nil) == SQLITE_OK else {
+        guard sqlite3_prepare_v2(db, lastResultQuery, -1, &statement, nil) == SQLITE_OK else {
             throw ConductorDBError.sqlite(String(cString: sqlite3_errmsg(db)))
         }
         defer { sqlite3_finalize(statement) }
 
         var sessions: [StalledSession] = []
         while sqlite3_step(statement) == SQLITE_ROW {
-            if let session = parseRow(statement) {
+            if let session = parseRow(statement, now: now) {
                 sessions.append(session)
             }
         }
         return sessions
     }
 
-    private static func parseRow(_ statement: OpaquePointer?) -> StalledSession? {
+    private static func parseRow(_ statement: OpaquePointer?, now: Date) -> StalledSession? {
         func column(_ index: Int32) -> String? {
             guard let text = sqlite3_column_text(statement, index) else { return nil }
             return String(cString: text)
@@ -89,13 +98,18 @@ enum ConductorDB {
               isDirectory.boolValue
         else { return nil } // workspace was removed; nothing to resume into
 
+        let stalledAt = column(5).flatMap(ISO.parse)
+        if let stalledAt, now.timeIntervalSince(stalledAt) > maxStallAge {
+            return nil // too old; the user has moved on
+        }
+
         return StalledSession(
             sessionID: sessionID,
             claudeSessionID: claudeSessionID,
             title: column(2) ?? "Untitled",
             workspacePath: workspacePath,
             errorText: payload["result"] as? String ?? "",
-            stalledAt: column(5).flatMap(ISO.parse)
+            stalledAt: stalledAt
         )
     }
 }

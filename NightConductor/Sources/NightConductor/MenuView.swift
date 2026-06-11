@@ -1,6 +1,12 @@
 import ServiceManagement
 import SwiftUI
 
+// Confirm these are right — they ship inside the app's About line.
+enum AboutLinks {
+    static let linkedIn = URL(string: "https://www.linkedin.com/in/jkkorn")!
+    static let substack = URL(string: "https://jonathankorn.substack.com")!
+}
+
 struct MenuView: View {
     @EnvironmentObject var state: AppState
     @State private var showSettings = false
@@ -16,6 +22,7 @@ struct MenuView: View {
             if showActivity { activityLog }
             Divider()
             footer
+            about
         }
         .padding(16)
         .frame(width: 340)
@@ -150,6 +157,8 @@ struct MenuView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
+                .accessibilityLabel("Settings")
+                .accessibilityIdentifier("settingsButton")
 
                 Button {
                     showActivity.toggle()
@@ -158,6 +167,8 @@ struct MenuView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
+                .accessibilityLabel("Activity")
+                .accessibilityIdentifier("activityButton")
 
                 Spacer()
                 if let tick = state.lastTick {
@@ -170,6 +181,22 @@ struct MenuView: View {
                     .controlSize(.small)
             }
         }
+    }
+}
+
+extension MenuView {
+    var about: some View {
+        HStack(spacing: 4) {
+            Spacer()
+            Text("Made with ❤️ in Brazil by")
+            Link("Jonathan Korn", destination: AboutLinks.linkedIn)
+            Text("·")
+            Link("Substack", destination: AboutLinks.substack)
+            Spacer()
+        }
+        .font(.caption2)
+        .foregroundStyle(.tertiary)
+        .tint(.secondary)
     }
 }
 

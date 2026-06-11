@@ -91,6 +91,13 @@ python3 -m autoconduct install    # launchd agent, ticks every 10 min
 - Not affiliated with [Conductor](https://conductor.build) or Anthropic —
   just built with love by a heavy user.
 
+## About
+
+Made with ❤️ in Brazil by [Jonathan Korn](https://www.linkedin.com/in/jkkorn) —
+I write about product and startups on [Substack](https://jonathankorn.substack.com).
+Built because I love [Conductor](https://conductor.build) and kept hitting my
+limits at midnight.
+
 ## License
 
 MIT

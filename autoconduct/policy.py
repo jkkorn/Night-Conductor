@@ -11,6 +11,10 @@ from datetime import datetime
 from .config import Config
 from .usage import UsageSnapshot
 
+# Extra weekly headroom (percentage points) the pacing gate always preserves
+# beyond linear pace, so overnight runs never starve the next workdays.
+PACING_MARGIN = 15.0
+
 
 @dataclass(frozen=True)
 class Decision:
@@ -74,17 +78,23 @@ def should_resume(usage: UsageSnapshot, config: Config, now: datetime) -> Decisi
             f"(ceiling {config.weekly_ceiling:.0f}%)",
         )
 
-    # TODO(user): implement the weekly pacing heuristic.
-    #
-    # Decide whether the *rate* of weekly consumption leaves wiggle room,
-    # not just whether we're under the absolute ceiling. Return:
-    #   Decision(False, "<why>")  -> too risky, skip this tick
-    #   Decision(True, "<why>")   -> safe, go resume sessions
-    #
-    # Sketch of one possible approach (linear pacing):
-    #   week_used = usage.seven_day.utilization          # e.g. 29.0
-    #   days_left = days_until_weekly_reset(usage, now)  # e.g. 1.6
-    #   ...compare week_used against how far through the week we are,
-    #   possibly with a safety margin so mornings aren't starved.
+    # Weekly pacing: only spend overnight budget if the week is being
+    # consumed slower than time is passing, with a safety margin so the
+    # following workdays aren't starved. E.g. 70% used with 5 of 7 days
+    # left means the week is burning ~2.5x too fast -> hold.
+    week_used = usage.seven_day.utilization
+    days_left = days_until_weekly_reset(usage, now)
+    elapsed_pct = (1.0 - min(days_left, 7.0) / 7.0) * 100.0
+    allowed = elapsed_pct + PACING_MARGIN
+    if week_used > allowed:
+        return Decision(
+            False,
+            f"weekly burn too fast: {week_used:.0f}% used with {days_left:.1f} "
+            f"days left (pace allows {allowed:.0f}%)",
+        )
 
-    return Decision(True, "under ceilings (pacing heuristic not yet implemented)")
+    return Decision(
+        True,
+        f"wiggle room: {week_used:.0f}% of week used, {days_left:.1f} days to "
+        f"reset (pace allows {allowed:.0f}%)",
+    )

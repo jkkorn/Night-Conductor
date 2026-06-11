@@ -73,6 +73,32 @@ class TestShouldResumeHardGates:
         decision = should_resume(snapshot(), default_config(), NOW)
         assert decision.resume
 
+
+class TestWeeklyPacing:
+    def test_burning_too_fast_holds(self):
+        # 70% used but 5 of 7 days still left -> way ahead of pace
+        resets = NOW.replace(day=16)  # 5 days out
+        snap = UsageSnapshot(
+            five_hour=Window(10.0, None),
+            seven_day=Window(70.0, resets),
+            fetched_at=NOW,
+        )
+        decision = should_resume(snap, default_config(), NOW)
+        assert not decision.resume
+        assert "burn too fast" in decision.reason
+
+    def test_high_usage_near_reset_resumes(self):
+        # 70% used with only ~half a day left -> plenty of wiggle room
+        resets = NOW.replace(hour=14)  # 12h out
+        snap = UsageSnapshot(
+            five_hour=Window(10.0, None),
+            seven_day=Window(70.0, resets),
+            fetched_at=NOW,
+        )
+        decision = should_resume(snap, default_config(), NOW)
+        assert decision.resume
+        assert "wiggle room" in decision.reason
+
     def test_decision_always_has_reason(self):
         for snap in (snapshot(), snapshot(five_hour=99.0), snapshot(weekly=99.0)):
             assert should_resume(snap, default_config(), NOW).reason

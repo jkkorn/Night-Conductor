@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Builds dist/Night Conductor.app from source. Requires Xcode command line tools.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+echo "▸ Building release binary…"
+swift build -c release
+
+APP_DIR="dist/Night Conductor.app"
+rm -rf "$APP_DIR"
+mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
+cp .build/release/NightConductor "$APP_DIR/Contents/MacOS/NightConductor"
+
+cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key><string>NightConductor</string>
+    <key>CFBundleIdentifier</key><string>app.night-conductor</string>
+    <key>CFBundleName</key><string>Night Conductor</string>
+    <key>CFBundleDisplayName</key><string>Night Conductor</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>1.0.0</string>
+    <key>CFBundleVersion</key><string>1</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>LSMinimumSystemVersion</key><string>14.0</string>
+    <key>LSUIElement</key><true/>
+    <key>NSHumanReadableCopyright</key><string>MIT License</string>
+</dict>
+</plist>
+PLIST
+
+echo "▸ Generating icon…"
+ICON_PNG="$(mktemp -d)/icon.png"
+swift scripts/make-icon.swift "$ICON_PNG"
+ICONSET="$(mktemp -d)/AppIcon.iconset"
+mkdir -p "$ICONSET"
+for s in 16 32 128 256 512; do
+    sips -z "$s" "$s" "$ICON_PNG" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
+    d=$((s * 2))
+    sips -z "$d" "$d" "$ICON_PNG" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
+done
+iconutil -c icns -o "$APP_DIR/Contents/Resources/AppIcon.icns" "$ICONSET"
+
+echo "▸ Signing (ad-hoc)…"
+codesign --force -s - "$APP_DIR"
+
+echo ""
+echo "✓ Built: $PWD/$APP_DIR"
+echo "  Drag it into /Applications and double-click. Look for the moon 🌙 in your menu bar."

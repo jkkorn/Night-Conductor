@@ -77,8 +77,15 @@ final class AppState: ObservableObject {
         await resumeStalledSessions(config: config, manual: manual)
     }
 
+    var uiResumeEnabled: Bool {
+        UserDefaults.standard.object(forKey: "uiResume") == nil
+            || UserDefaults.standard.bool(forKey: "uiResume")
+    }
+
     private func resumeStalledSessions(config: PolicyConfig, manual: Bool) async {
-        guard let claudePath = Resumer.findClaudeBinary() else {
+        let useUI = uiResumeEnabled && UIResumer.hasAccessibilityPermission
+        let claudePath = Resumer.findClaudeBinary()
+        if !useUI && claudePath == nil {
             log("⚠️ claude CLI not found — install Claude Code first")
             return
         }
@@ -96,14 +103,39 @@ final class AppState: ObservableObject {
 
             currentlyResuming = session.title
             log("▶ Resuming \(session.title)")
-            let result = await Task.detached(priority: .utility) {
-                Resumer.resume(session: session, claudePath: claudePath, config: config)
-            }.value
+            var result = ResumeResult(ok: false, detail: "not attempted")
+            var resumedInsideConductor = false
+            if useUI {
+                result = await Task.detached(priority: .utility) {
+                    UIResumer.resume(session: session)
+                }.value
+                resumedInsideConductor = result.ok
+                if !result.ok {
+                    log("↻ UI resume failed (\(result.detail)) — falling back to headless")
+                }
+            }
+            if !result.ok, let claudePath {
+                result = await Task.detached(priority: .utility) {
+                    Resumer.resume(session: session, claudePath: claudePath, config: config)
+                }.value
+            }
             currentlyResuming = nil
-            log(result.ok ? "✓ \(session.title) finished a run" : "✗ \(session.title): \(result.detail)")
+            if resumedInsideConductor {
+                log("✓ \(session.title) resumed inside Conductor — chat stays in sync")
+            } else {
+                log(result.ok ? "✓ \(session.title) finished a run" : "✗ \(session.title): \(result.detail)")
+            }
 
             night = night.recording(session.sessionID)
             night.save()
+
+            // A UI resume hands the run to Conductor and returns immediately,
+            // so its cost isn't measurable yet. One per tick keeps the
+            // budget checks honest; the next tick handles the next session.
+            if resumedInsideConductor {
+                log("Next stalled session at the next check (10 min)")
+                break
+            }
 
             // A long agentic run can eat a big chunk of the 5h window on its
             // own — re-check the budget before touching the next session.

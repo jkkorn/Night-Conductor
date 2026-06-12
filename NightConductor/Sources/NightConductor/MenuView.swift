@@ -243,6 +243,7 @@ struct SettingsPane: View {
     @AppStorage("endHour") private var endHour = 7
     @AppStorage("fiveHourCeiling") private var fiveHourCeiling = 85.0
     @AppStorage("weeklyCeiling") private var weeklyCeiling = 90.0
+    @AppStorage("uiResume") private var uiResume = true
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
 
     var body: some View {
@@ -282,6 +283,28 @@ struct SettingsPane: View {
                         launchAtLogin = SMAppService.mainApp.status == .enabled
                     }
                 }
+            Divider()
+            Toggle("Resume inside Conductor", isOn: $uiResume)
+                .font(.caption)
+                .toggleStyle(.checkbox)
+                .onChange(of: uiResume) { _, enabled in
+                    if enabled, !UIResumer.hasAccessibilityPermission {
+                        UIResumer.requestPermission()
+                    }
+                }
+            if uiResume {
+                if UIResumer.hasAccessibilityPermission {
+                    Text("Presses Conductor's own Retry button, so the chat stays in sync. Falls back to a headless resume if that fails.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text("Needs Accessibility access: System Settings → Privacy & Security → Accessibility → enable Night Conductor.")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
         .padding(10)
         .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))

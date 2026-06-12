@@ -42,9 +42,33 @@ enum ConductorDB {
     JOIN workspaces w ON w.id = s.workspace_id
     WHERE r.rn = 1
       AND w.state != 'archived'
+      AND s.status != 'working'
       AND json_extract(r.content, '$.is_error') = 1
       AND json_extract(r.content, '$.api_error_status') = 429
     """
+
+    /// Current status of a session ('working', 'idle', 'error', …).
+    static func sessionStatus(
+        _ sessionID: String, dbPath: String = defaultPath
+    ) throws -> String? {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(dbPath, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
+            throw ConductorDBError.sqlite("cannot open read-only")
+        }
+        defer { sqlite3_close(db) }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            db, "SELECT status FROM sessions WHERE id = ?", -1, &statement, nil
+        ) == SQLITE_OK else {
+            throw ConductorDBError.sqlite(String(cString: sqlite3_errmsg(db)))
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, sessionID, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        guard sqlite3_step(statement) == SQLITE_ROW,
+              let text = sqlite3_column_text(statement, 0)
+        else { return nil }
+        return String(cString: text)
+    }
 
     static func findStalledSessions(
         dbPath: String = defaultPath, now: Date = Date()

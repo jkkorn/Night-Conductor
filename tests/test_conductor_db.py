@@ -32,7 +32,7 @@ def db(tmp_path):
         """
         CREATE TABLE sessions (
             id TEXT PRIMARY KEY, claude_session_id TEXT,
-            workspace_id TEXT, title TEXT
+            workspace_id TEXT, title TEXT, status TEXT
         );
         CREATE TABLE workspaces (
             id TEXT PRIMARY KEY, workspace_path TEXT, state TEXT
@@ -56,6 +56,7 @@ def _seed(
     ws_state="ready",
     ws_exists=True,
     base_day="2026-06-10",
+    status="error",
 ):
     ws_path = tmp_path / f"ws-{session_id}"
     if ws_exists:
@@ -65,8 +66,14 @@ def _seed(
         (f"ws-{session_id}", str(ws_path), ws_state),
     )
     conn.execute(
-        "INSERT INTO sessions VALUES (?, ?, ?, ?)",
-        (session_id, f"claude-{session_id}", f"ws-{session_id}", f"Task {session_id}"),
+        "INSERT INTO sessions VALUES (?, ?, ?, ?, ?)",
+        (
+            session_id,
+            f"claude-{session_id}",
+            f"ws-{session_id}",
+            f"Task {session_id}",
+            status,
+        ),
     )
     for i, payload in enumerate(messages):
         conn.execute(
@@ -114,6 +121,14 @@ class TestFindStalledSessions:
         _seed(conn, tmp_path, "s5", [LIMIT_ERROR], ws_state="ready")
         stalled = find_stalled_sessions(path, now=NOW)
         assert [s.session_id for s in stalled] == ["s5"]
+
+    def test_ignores_session_conductor_is_already_running(self, db, tmp_path):
+        # Regression: if the user (or Conductor) already retried a stalled
+        # session, its status is 'working' — resuming it again would
+        # double-run the task and burn budget for nothing.
+        conn, path = db
+        _seed(conn, tmp_path, "s9", [LIMIT_ERROR], status="working")
+        assert find_stalled_sessions(path, now=NOW) == ()
 
     def test_ignores_stalls_older_than_48h(self, db, tmp_path):
         conn, path = db

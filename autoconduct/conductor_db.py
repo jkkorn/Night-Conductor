@@ -43,6 +43,7 @@ JOIN sessions s ON s.id = r.session_id
 JOIN workspaces w ON w.id = s.workspace_id
 WHERE r.rn = 1
   AND w.state != 'archived'
+  AND s.status != 'working'
   AND json_extract(r.content, '$.is_error') = 1
   AND json_extract(r.content, '$.api_error_status') = 429
 """

@@ -1,9 +1,12 @@
 import Foundation
 import SwiftUI
 
-/// Orchestrates the watch loop: every 10 minutes fetch usage, evaluate the
-/// budget policy, and (when armed, in-hours, and budget-safe) resume stalled
-/// sessions one at a time, re-checking the budget after each.
+/// Orchestrates two independent loops:
+///   • a fast **view loop** that refreshes the displayed usage and stalled
+///     list every `scanInterval` — the local DB scan is essentially free,
+///     so the list never shows sessions that already recovered, and
+///   • a slower **resume loop** that, when armed + in-hours + budget-safe,
+///     resumes stalled sessions one at a time, re-checking budget after each.
 @MainActor
 final class AppState: ObservableObject {
     @Published var usage: UsageSnapshot?
@@ -14,9 +17,11 @@ final class AppState: ObservableObject {
     @Published var currentlyResuming: String?
     @Published var lastTick: Date?
 
-    static let tickInterval: TimeInterval = 600
+    static let scanInterval: TimeInterval = 30     // refresh the displayed list
+    static let resumeInterval: TimeInterval = 600  // how often resumes are attempted
 
-    private var loop: Task<Void, Never>?
+    private var viewLoop: Task<Void, Never>?
+    private var resumeLoop: Task<Void, Never>?
 
     init(forScreenshots: Bool = false) {
         UserDefaults.standard.register(defaults: [
@@ -45,41 +50,67 @@ final class AppState: ObservableObject {
     }
 
     func start() {
-        loop?.cancel()
-        loop = Task { [weak self] in
+        viewLoop?.cancel()
+        resumeLoop?.cancel()
+        viewLoop = Task { [weak self] in
             while !Task.isCancelled {
-                await self?.tick(manual: false)
-                try? await Task.sleep(for: .seconds(Self.tickInterval))
+                await self?.refreshView()
+                try? await Task.sleep(for: .seconds(Self.scanInterval))
+            }
+        }
+        resumeLoop = Task { [weak self] in
+            while !Task.isCancelled {
+                // The view loop already did the first refresh; wait one
+                // resume interval before the first resume attempt.
+                try? await Task.sleep(for: .seconds(Self.resumeInterval))
+                await self?.resumeTick()
             }
         }
     }
 
-    /// One scheduling tick. Manual ticks (the "Resume now" button) skip the
-    /// active-hours gate but never the budget gates.
-    func tick(manual: Bool) async {
-        isWorking = true
-        defer {
-            isWorking = false
-            lastTick = Date()
-        }
-
+    /// Cheap, frequent refresh of what the popover shows. Never resumes.
+    /// The stalled list comes from a local DB read, so it stays fresh even
+    /// when the network is down (usage failure holds, but doesn't wipe it).
+    func refreshView() async {
         let config = PolicyConfig.fromDefaults()
+        if let fresh = try? ConductorDB.findStalledSessions() {
+            stalled = fresh
+        }
+        defer { lastTick = Date() }
         do {
             usage = try await UsageClient.fetchUsage()
         } catch {
-            decision = Decision(resume: false, reason: error.localizedDescription)
-            log("⚠️ Cannot read usage — holding (fail closed)")
-            return // no usage data -> never resume
+            decision = Decision(resume: false, reason: "Can't read usage — holding")
+            return
         }
-        guard let snapshot = usage else { return }
+        if let snapshot = usage {
+            decision = Policy.shouldResume(
+                usage: snapshot, config: config, now: Date(), ignoreActiveHours: false
+            )
+        }
+    }
 
-        decision = Policy.shouldResume(
-            usage: snapshot, config: config, now: Date(), ignoreActiveHours: manual
-        )
-        stalled = (try? ConductorDB.findStalledSessions()) ?? []
+    /// The budget-gated resume pass, run on the slower resume loop.
+    func resumeTick() async {
+        await refreshView()
+        let config = PolicyConfig.fromDefaults()
+        guard armed, decision?.resume == true, !stalled.isEmpty else { return }
+        await resumeStalledSessions(config: config, manual: false)
+    }
 
-        guard armed || manual else { return }
-        guard decision?.resume == true, !stalled.isEmpty else { return }
+    /// Manual "Resume now": refresh, then resume ignoring the active-hours
+    /// gate (the user is present) but never the budget gates.
+    func tick(manual: Bool) async {
+        isWorking = true
+        defer { isWorking = false }
+        await refreshView()
+        let config = PolicyConfig.fromDefaults()
+        if let snapshot = usage {
+            decision = Policy.shouldResume(
+                usage: snapshot, config: config, now: Date(), ignoreActiveHours: manual
+            )
+        }
+        guard armed || manual, decision?.resume == true, !stalled.isEmpty else { return }
         await resumeStalledSessions(config: config, manual: manual)
     }
 
@@ -139,7 +170,7 @@ final class AppState: ObservableObject {
             // so its cost isn't measurable yet. One per tick keeps the
             // budget checks honest; the next tick handles the next session.
             if resumedInsideConductor {
-                log("Next stalled session at the next check (10 min)")
+                log("Handed to Conductor — next session at the next resume cycle")
                 break
             }
 

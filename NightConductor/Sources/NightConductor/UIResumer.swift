@@ -38,13 +38,15 @@ enum UIResumer {
         AXUIElementSetAttributeValue(axApp, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
         Thread.sleep(forTimeInterval: 1.0)
 
-        // 1. Navigate: the sidebar lists workspaces as links titled after
-        //    their session (e.g. "Initialize gstack +2.2k").
-        let title = session.title.lowercased()
-        guard let workspaceLink = findElement(in: axApp, role: "AXLink", where: { label in
-            label.lowercased().hasPrefix(title)
-        }) else {
-            return ResumeResult(ok: false, detail: "'\(session.title)' not found in sidebar")
+        // 1. Navigate: Conductor's sidebar labels workspaces by their
+        //    directory name (e.g. "new-york" shows as "New york"), not the
+        //    session title. Match on the normalized workspace name first,
+        //    then fall back to the title for same-named workspaces.
+        guard let workspaceLink = findWorkspaceLink(in: axApp, session: session) else {
+            return ResumeResult(
+                ok: false,
+                detail: "'\(session.workspaceName)' not found in Conductor's sidebar"
+            )
         }
         AXUIElementPerformAction(workspaceLink, kAXPressAction as CFString)
         Thread.sleep(forTimeInterval: 2.5)
@@ -71,6 +73,39 @@ enum UIResumer {
             }
         }
         return ResumeResult(ok: false, detail: "pressed Retry but session didn't start")
+    }
+
+    // MARK: - Navigation
+
+    /// Conductor shows "new-york" as "New york", so compare on a normalized
+    /// form: separators → spaces, lowercased.
+    static func normalize(_ name: String) -> String {
+        name.replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: "_", with: " ")
+            .lowercased()
+            .trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Finds the sidebar link for a session's workspace, trying the most
+    /// specific signal first: exact workspace name, then workspace-name
+    /// prefix (the label often has a PR title appended), then session title.
+    private static func findWorkspaceLink(
+        in root: AXUIElement, session: StalledSession
+    ) -> AXUIElement? {
+        let workspace = normalize(session.workspaceName)
+        let title = normalize(session.title)
+
+        let strategies: [(String) -> Bool] = [
+            { normalize($0) == workspace },
+            { normalize($0).hasPrefix(workspace) && !workspace.isEmpty },
+            { normalize($0).hasPrefix(title) && !title.isEmpty },
+        ]
+        for matches in strategies {
+            if let link = findElement(in: root, role: "AXLink", where: matches) {
+                return link
+            }
+        }
+        return nil
     }
 
     // MARK: - AX tree search

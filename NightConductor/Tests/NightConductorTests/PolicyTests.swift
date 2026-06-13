@@ -101,3 +101,20 @@ final class PolicyTests: XCTestCase {
         XCTAssertNotNil(ISO.parse("2026-06-09T03:42:18.186Z")) // Conductor DB
     }
 }
+
+final class UIResumerTests: XCTestCase {
+    func testNormalizeMatchesConductorSidebarLabels() {
+        // "new-york" workspace shows as "New york" in the sidebar
+        XCTAssertEqual(UIResumer.normalize("new-york"), "new york")
+        XCTAssertEqual(UIResumer.normalize("New york"), "new york")
+        // separators unified
+        XCTAssertEqual(UIResumer.normalize("my_cool-workspace"), "my cool workspace")
+    }
+
+    func testSidebarLabelWithAppendedPRTitleStillPrefixMatches() {
+        // "yokohama" shows as "Yokohama pr1 funnel fixes +977 -205"
+        let ws = UIResumer.normalize("yokohama")
+        let sidebar = UIResumer.normalize("Yokohama pr1 funnel fixes +977 -205")
+        XCTAssertTrue(sidebar.hasPrefix(ws))
+    }
+}

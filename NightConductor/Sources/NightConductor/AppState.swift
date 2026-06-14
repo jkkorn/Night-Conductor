@@ -17,11 +17,16 @@ final class AppState: ObservableObject {
     @Published var currentlyResuming: String?
     @Published var lastTick: Date?
 
-    static let scanInterval: TimeInterval = 30     // refresh the displayed list
-    static let resumeInterval: TimeInterval = 600  // how often resumes are attempted
+    static let scanInterval: TimeInterval = 30        // local DB scan — cheap
+    static let resumeInterval: TimeInterval = 600     // how often resumes are attempted
+    // The usage API rate-limits rapid polling (429 within seconds), so the
+    // 30s view loop reads it from cache and only re-fetches this often.
+    static let usageRefreshInterval: TimeInterval = 180   // 3 min
+    static let usageStaleAfter: TimeInterval = 900        // 15 min → treat as unavailable
 
     private var viewLoop: Task<Void, Never>?
     private var resumeLoop: Task<Void, Never>?
+    private var lastUsageFetchAt: Date?
     // Guards against the resume loop and the manual "Resume now" button
     // running a resume pass at the same time (which could double-run a
     // session and bypass the per-night caps).
@@ -78,11 +83,13 @@ final class AppState: ObservableObject {
     /// when the network is down (usage failure holds, but doesn't wipe it).
     /// Returns whether *fresh* usage was obtained — callers must not resume
     /// on a stale snapshot (fail closed).
+    /// Refresh the display. `forceUsage` bypasses the cache (used right
+    /// before a resume so budget gates see current data). Returns whether we
+    /// have a fresh-enough usage reading to act on. Never resumes.
     @discardableResult
-    func refreshView() async -> Bool {
+    func refreshView(forceUsage: Bool = false) async -> Bool {
         let config = PolicyConfig.fromDefaults()
-        // Hold the Mac awake while the watch is armed and in its window, so
-        // every tick and resume actually runs (no privileges needed).
+        // Hold the Mac awake while the watch is armed and in its window.
         let inWindow = Policy.inActiveHours(
             hour: Calendar.current.component(.hour, from: Date()),
             start: config.startHour, end: config.endHour
@@ -93,23 +100,42 @@ final class AppState: ObservableObject {
             stalled = fresh
         }
         defer { lastTick = Date() }
-        do {
-            usage = try await UsageClient.fetchUsage()
-        } catch {
-            decision = Decision(resume: false, reason: "Can't read usage — holding")
-            return false
+
+        // Re-fetch usage only when forced or the cache is older than the
+        // refresh interval — the API 429s if polled every 30s.
+        let age = Date().timeIntervalSince(lastUsageFetchAt ?? .distantPast)
+        if forceUsage || usage == nil || age > Self.usageRefreshInterval {
+            if let fresh = try? await UsageClient.fetchUsage() {
+                usage = fresh
+                lastUsageFetchAt = Date()
+            } else if forceUsage {
+                // About to resume but can't confirm budget → fail closed.
+                if usage == nil {
+                    decision = Decision(resume: false, reason: "Can't read usage — holding")
+                }
+                return false
+            }
+            // Not forced and fetch failed → keep the cached reading.
         }
-        if let snapshot = usage {
+
+        let freshness = Date().timeIntervalSince(lastUsageFetchAt ?? .distantPast)
+        if let snapshot = usage, freshness <= Self.usageStaleAfter {
             decision = Policy.shouldResume(
                 usage: snapshot, config: config, now: Date(), ignoreActiveHours: false
             )
+            return true
         }
-        return true
+        decision = Decision(
+            resume: false,
+            reason: usage == nil ? "Checking usage…" : "Usage data is stale — holding"
+        )
+        return false
     }
 
     /// The budget-gated resume pass, run on the slower resume loop.
     func resumeTick() async {
-        await refreshView()
+        // Force a fresh read so the budget decision reflects current usage.
+        guard await refreshView(forceUsage: true) else { return }
         let config = PolicyConfig.fromDefaults()
         guard armed, decision?.resume == true, !stalled.isEmpty else { return }
         await resumeStalledSessions(config: config, manual: false)
@@ -120,9 +146,8 @@ final class AppState: ObservableObject {
     func tick(manual: Bool) async {
         isWorking = true
         defer { isWorking = false }
-        // Fail closed: if we couldn't get fresh usage, refreshView already
-        // set a holding decision — don't recompute against a stale snapshot.
-        guard await refreshView() else { return }
+        // Fail closed: a manual resume needs a fresh, confirmed reading.
+        guard await refreshView(forceUsage: true) else { return }
         let config = PolicyConfig.fromDefaults()
         if let snapshot = usage {
             decision = Policy.shouldResume(

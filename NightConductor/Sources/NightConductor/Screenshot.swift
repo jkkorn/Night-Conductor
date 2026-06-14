@@ -6,7 +6,7 @@ import SwiftUI
 /// Uses representative demo data so real session titles never ship.
 @MainActor
 enum Screenshotter {
-    static func render(to path: String, showSettings: Bool, state stateName: String = "default") {
+    static func render(to path: String, showSettings: Bool, state stateName: String = "default", hour: Double = 23) {
         // ImageRenderer can't draw NSView-backed controls (Toggle, Stepper,
         // Slider), so render in a real off-to-the-side window and snapshot
         // the view hierarchy instead — that draws everything.
@@ -15,6 +15,7 @@ enum Screenshotter {
         app.appearance = NSAppearance(named: .darkAqua)
         app.finishLaunching()
 
+        NightSkyView.hourOverride = hour // docs default to night (23)
         let state = demoState(stateName)
         let root = MenuView(showSettings: showSettings)
             .environmentObject(state)
@@ -23,6 +24,29 @@ enum Screenshotter {
             .background(Color(red: 0.12, green: 0.12, blue: 0.14))
             .environment(\.colorScheme, .dark)
         renderHosting(AnyView(root), to: path)
+    }
+
+    /// Render the menu-bar label at a few usage levels on a dark strip, to
+    /// verify it reads as a consumption gauge.
+    static func renderMenuBar(to path: String) {
+        let app = NSApplication.shared
+        app.setActivationPolicy(.accessory)
+        app.appearance = NSAppearance(named: .darkAqua)
+        app.finishLaunching()
+        let strip = HStack(spacing: 22) {
+            ForEach([18.0, 52.0, 91.0], id: \.self) { v in
+                HStack(spacing: 3) {
+                    UsageRing(value: v)
+                    Text("\(Int(v))%")
+                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 24)
+        .background(Color(red: 0.13, green: 0.13, blue: 0.15))
+        .environment(\.colorScheme, .dark)
+        renderHosting(strip.fixedSize(), to: path)
     }
 
     private static func renderHosting(_ rootView: some View, to path: String) {
@@ -94,7 +118,7 @@ enum Screenshotter {
             StalledSession(
                 sessionID: "demo-2", claudeSessionID: "demo-2",
                 title: "Fix paywall A/B variants", workspacePath: "/ws/myapp/dallas",
-                errorText: "You've hit your session limit · resets 1:30am",
+                errorText: "API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
                 stalledAt: now.addingTimeInterval(-25 * 60)
             ),
         ]

@@ -151,6 +151,16 @@ class TestFindStalledSessions:
         stalled = find_stalled_sessions(path, now=NOW)
         assert [s.session_id for s in stalled] == ["s8"]
 
+    def test_classifies_usage_limit_vs_transient(self, db, tmp_path):
+        conn, path = db
+        _seed(conn, tmp_path, "u1", [LIMIT_ERROR])
+        transient = {**LIMIT_ERROR, "result": "API Error: Server is temporarily "
+                     "limiting requests (not your usage limit) · Rate limited"}
+        _seed(conn, tmp_path, "t1", [transient])
+        by_id = {s.session_id: s for s in find_stalled_sessions(path, now=NOW)}
+        assert by_id["u1"].kind == "usage_limit"
+        assert by_id["t1"].kind == "transient"
+
     def test_missing_db_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
             find_stalled_sessions(tmp_path / "missing.db", now=NOW)

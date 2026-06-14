@@ -6,6 +6,40 @@ enum AboutLinks {
     static let linkedIn = URL(string: "https://www.linkedin.com/in/jkkorn")!
 }
 
+/// Design tokens — one 4pt spacing scale and one card surface, so spacing
+/// and chrome are systematic instead of per-view magic numbers.
+enum Design {
+    static let xs: CGFloat = 2   // within a tight text stack
+    static let s: CGFloat = 4    // label → control
+    static let m: CGFloat = 8    // within a section
+    static let l: CGFloat = 12   // card padding / section gap
+    static let xl: CGFloat = 16  // window padding
+    static let cardRadius: CGFloat = 8
+}
+
+extension Color {
+    /// One semantic ramp for "how full is this budget": green = headroom,
+    /// amber = approaching the ceiling, red = at/over. Indigo is reserved
+    /// for the brand (the moon), never for status.
+    static func usageStatus(_ pct: Double) -> Color {
+        switch pct {
+        case ..<60: return .green
+        case ..<85: return .orange
+        default: return .red
+        }
+    }
+}
+
+extension View {
+    /// The single card surface used by the decision pill and settings pane.
+    func cardSurface() -> some View {
+        padding(Design.l)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.quaternary.opacity(0.5),
+                        in: RoundedRectangle(cornerRadius: Design.cardRadius))
+    }
+}
+
 struct MenuView: View {
     @EnvironmentObject var state: AppState
     @State private var showSettings: Bool
@@ -16,7 +50,7 @@ struct MenuView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: Design.l) {
             header
             Divider()
             usageSection
@@ -27,27 +61,33 @@ struct MenuView: View {
             footer
             about
         }
-        .padding(16)
+        .padding(Design.xl)
         .frame(width: 340)
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: Design.l) {
             Image(systemName: "moon.stars.fill")
                 .font(.title2)
-                .foregroundStyle(.indigo.gradient)
-            VStack(alignment: .leading, spacing: 1) {
+                .foregroundStyle(.indigo.gradient) // indigo = brand identity only
+            VStack(alignment: .leading, spacing: Design.xs) {
                 Text("Night Conductor").font(.headline)
                 Text(subtitle).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            Toggle("", isOn: Binding(
-                get: { state.armed },
-                set: { state.armed = $0 }
-            ))
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .help("Arm or disarm the night watch")
+            VStack(alignment: .trailing, spacing: Design.xs) {
+                Toggle("Arm night watch", isOn: Binding(
+                    get: { state.armed },
+                    set: { state.armed = $0 }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .help("Arm or disarm the night watch")
+                Text(state.armed ? "ARMED" : "PAUSED")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(state.armed ? Color.green : .secondary)
+            }
         }
     }
 
@@ -58,7 +98,7 @@ struct MenuView: View {
     }
 
     private var usageSection: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: Design.m) {
             UsageMeter(
                 label: "5-hour window",
                 window: state.usage?.fiveHour,
@@ -73,7 +113,7 @@ struct MenuView: View {
     }
 
     private var decisionRow: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Design.m) {
             Circle()
                 .fill(decisionColor)
                 .frame(width: 8, height: 8)
@@ -82,9 +122,7 @@ struct MenuView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
         }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+        .cardSurface()
     }
 
     private var decisionColor: Color {
@@ -101,22 +139,30 @@ struct MenuView: View {
                     .font(.caption).foregroundStyle(.tertiary)
             }
         } else {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("STALLED AT THE LIMIT")
+            VStack(alignment: .leading, spacing: Design.m) {
+                Text("STALLED AT THE LIMIT · \(state.stalled.count)")
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.tertiary)
-                ForEach(state.stalled) { session in
-                    HStack(spacing: 8) {
-                        Image(systemName: "pause.circle.fill")
-                            .foregroundStyle(.orange)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(session.title).font(.callout).lineLimit(1)
-                            Text(session.workspaceName)
-                                .font(.caption2).foregroundStyle(.secondary)
+                    .foregroundStyle(.secondary)
+                // Bounded height so a long stalled list can't push the
+                // popover past the screen; scrolls past ~4 rows.
+                ScrollView {
+                    VStack(alignment: .leading, spacing: Design.m) {
+                        ForEach(state.stalled) { session in
+                            HStack(spacing: Design.m) {
+                                Image(systemName: "pause.circle.fill")
+                                    .foregroundStyle(.orange)
+                                VStack(alignment: .leading, spacing: Design.xs) {
+                                    Text(session.title).font(.callout).lineLimit(1)
+                                    Text(session.workspaceName)
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                            }
                         }
-                        Spacer()
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .frame(maxHeight: state.stalled.count > 4 ? 160 : .infinity)
                 Button {
                     Task { await state.tick(manual: true) }
                 } label: {
@@ -148,35 +194,24 @@ struct MenuView: View {
     }
 
     private var footer: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: Design.m) {
             if showSettings { SettingsPane() }
             HStack {
                 // No animation here: animated height changes make the
                 // MenuBarExtra window dismiss itself on some macOS versions.
-                Button {
+                ToolbarIconButton(systemName: "gearshape", label: "Settings") {
                     showSettings.toggle()
-                } label: {
-                    Image(systemName: "gearshape")
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .accessibilityLabel("Settings")
                 .accessibilityIdentifier("settingsButton")
-
-                Button {
+                ToolbarIconButton(systemName: "list.bullet.rectangle", label: "Activity") {
                     showActivity.toggle()
-                } label: {
-                    Image(systemName: "list.bullet.rectangle")
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .accessibilityLabel("Activity")
                 .accessibilityIdentifier("activityButton")
 
                 Spacer()
                 if let tick = state.lastTick {
                     Text("Checked \(tick.formatted(date: .omitted, time: .shortened))")
-                        .font(.caption2).foregroundStyle(.tertiary)
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
                 Spacer()
 
@@ -184,6 +219,32 @@ struct MenuView: View {
                     .controlSize(.small)
             }
         }
+    }
+}
+
+/// A menu-bar-style icon button: real hit target plus a hover highlight, so
+/// it reads as clickable instead of a dim decorative glyph.
+struct ToolbarIconButton: View {
+    let systemName: String
+    let label: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .frame(width: 26, height: 22)
+                .background(
+                    hovering ? Color.secondary.opacity(0.18) : .clear,
+                    in: RoundedRectangle(cornerRadius: 5)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .onHover { hovering = $0 }
+        .help(label)
+        .accessibilityLabel(label)
     }
 }
 
@@ -210,14 +271,6 @@ struct UsageMeter: View {
 
     private var value: Double { window?.utilization ?? 0 }
 
-    private var tint: Color {
-        switch value {
-        case ..<60: return .indigo
-        case ..<85: return .orange
-        default: return .red
-        }
-    }
-
     private var resetText: String {
         guard let resetsAt = window?.resetsAt else { return "" }
         switch resetStyle {
@@ -227,17 +280,26 @@ struct UsageMeter: View {
     }
 
     var body: some View {
-        VStack(spacing: 3) {
+        VStack(spacing: Design.s) {
             HStack {
                 Text(label).font(.caption)
                 Spacer()
-                Text(resetText).font(.caption2).foregroundStyle(.tertiary)
+                Text(resetText).font(.caption2).foregroundStyle(.secondary)
                 Text(window == nil ? "–" : "\(Int(value))%")
                     .font(.caption.weight(.semibold).monospacedDigit())
             }
-            ProgressView(value: min(value, 100), total: 100)
-                .progressViewStyle(.linear)
-                .tint(tint.gradient)
+            // Custom bar with an explicit semantic fill. macOS's
+            // ProgressView(.linear) ignores .tint in some render contexts,
+            // washing the fill to gray — and the color IS the signal here.
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.secondary.opacity(0.2))
+                    Capsule()
+                        .fill(Color.usageStatus(value))
+                        .frame(width: max(4, geo.size.width * min(value, 100) / 100))
+                }
+            }
+            .frame(height: 6)
         }
     }
 }
@@ -256,7 +318,7 @@ struct SettingsPane: View {
     private let permissionTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Design.m) {
             HStack {
                 Text("Watch from").font(.caption)
                 Stepper("\(startHour):00", value: $startHour, in: 0...23)
@@ -268,7 +330,7 @@ struct SettingsPane: View {
             }
             Text("Nothing starts after \(((endHour - 5) + 24) % 24):00, so your 5-hour window is fresh when you sit down.")
                 .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Text("5h ceiling \(Int(fiveHourCeiling))%").font(.caption)
@@ -308,7 +370,7 @@ struct SettingsPane: View {
                 if hasAccessibility {
                     Text("Presses Conductor's own Retry button, so the chat stays in sync. Falls back to a headless resume if that fails.")
                         .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
                     Text("Needs Accessibility access: System Settings → Privacy & Security → Accessibility → enable Night Conductor.")
@@ -318,8 +380,8 @@ struct SettingsPane: View {
                 }
             }
         }
-        .padding(10)
-        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+        .padding(Design.l)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: Design.cardRadius))
         .onReceive(permissionTimer) { _ in
             hasAccessibility = UIResumer.hasAccessibilityPermission
         }

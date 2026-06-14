@@ -58,6 +58,15 @@ class StalledSession:
     error_text: str  # e.g. "You've hit your session limit · resets 7:50pm"
     stalled_at: datetime
 
+    @property
+    def kind(self) -> str:
+        """'transient' for a temporary server throttle, else 'usage_limit'.
+        Both arrive as HTTP 429 but mean different things."""
+        t = self.error_text.lower()
+        if "temporarily limiting" in t or "not your usage limit" in t:
+            return "transient"
+        return "usage_limit"
+
 
 def _parse_row(row: tuple, now: datetime) -> StalledSession | None:
     session_id, claude_session_id, title, workspace_path, content, created = row

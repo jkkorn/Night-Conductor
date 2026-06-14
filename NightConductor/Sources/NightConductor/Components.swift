@@ -40,6 +40,32 @@ private struct HoverLift: ViewModifier {
     }
 }
 
+/// A compact ring gauge for the menu bar: a colored arc that fills with
+/// usage so it reads unmistakably as a consumption meter, not a weather
+/// glyph. Dims when the watch is paused.
+struct UsageRing: View {
+    var value: Double // 0...100
+    var armed: Bool = true
+    var diameter: CGFloat = 13
+    var lineWidth: CGFloat = 2.6
+
+    var body: some View {
+        ZStack {
+            Circle().stroke(.secondary.opacity(0.35), lineWidth: lineWidth)
+            Circle()
+                .trim(from: 0, to: min(max(value, 0), 100) / 100)
+                .stroke(
+                    Color.usageStatus(value),
+                    style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
+                )
+                .rotationEffect(.degrees(-90))
+                .animation(.snappy(duration: 0.4), value: value)
+        }
+        .frame(width: diameter, height: diameter)
+        .opacity(armed ? 1.0 : 0.45)
+    }
+}
+
 /// Custom hour stepper — replaces AppKit `Stepper` (which triggers
 /// AttributeGraph layout cycles in this hosting context) with a crafted
 /// −/+ control that matches the night theme.

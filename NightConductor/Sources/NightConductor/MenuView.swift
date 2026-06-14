@@ -184,14 +184,23 @@ struct MenuView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: Design.m) {
                         ForEach(state.stalled) { session in
+                            let accent: Color = session.kind == .transient ? .yellow : .orange
                             HStack(spacing: Design.m) {
-                                Image(systemName: "pause.circle.fill")
+                                Image(systemName: session.kind.icon)
                                     .font(.title3)
-                                    .foregroundStyle(.orange.gradient)
+                                    .foregroundStyle(accent.gradient)
                                 VStack(alignment: .leading, spacing: Design.xs) {
                                     Text(session.title).font(.body).lineLimit(1)
-                                    Text(session.workspaceName)
-                                        .font(.caption).foregroundStyle(.secondary)
+                                    HStack(spacing: Design.s) {
+                                        Text(session.workspaceName)
+                                            .font(.caption).foregroundStyle(.secondary)
+                                        Text(session.kind.shortLabel)
+                                            .font(.caption2.weight(.medium))
+                                            .foregroundStyle(accent)
+                                            .padding(.horizontal, 5)
+                                            .padding(.vertical, 1)
+                                            .background(accent.opacity(0.15), in: Capsule())
+                                    }
                                 }
                                 Spacer()
                             }

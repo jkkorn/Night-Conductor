@@ -25,7 +25,7 @@ def cmd_status(_args) -> int:
     print(f"Decision      : {'RESUME' if decision.resume else 'HOLD'} — {decision.reason}")
     print(f"Stalled       : {len(stalled)} session(s)")
     for s in stalled:
-        print(f"  - {s.title} [{s.session_id[:8]}] @ {s.workspace_path}")
+        print(f"  - {s.title} [{s.session_id[:8]}] ({s.kind}) @ {s.workspace_path}")
         print(f"    stalled {s.stalled_at:%Y-%m-%d %H:%M} UTC: {s.error_text}")
     return 0
 

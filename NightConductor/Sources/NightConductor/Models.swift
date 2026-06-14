@@ -11,6 +11,35 @@ struct UsageSnapshot: Equatable {
     let fetchedAt: Date
 }
 
+/// Why a session stalled — both arrive as HTTP 429 but mean different things.
+enum StallKind: Equatable {
+    case usageLimit   // "You've hit your usage/session limit · resets …"
+    case transient    // "Server is temporarily limiting requests (not your usage limit)"
+
+    /// Classify from the error result text.
+    static func classify(_ text: String) -> StallKind {
+        let t = text.lowercased()
+        if t.contains("temporarily limiting") || t.contains("not your usage limit") {
+            return .transient
+        }
+        return .usageLimit
+    }
+
+    var shortLabel: String {
+        switch self {
+        case .usageLimit: return "usage limit"
+        case .transient: return "rate-limited"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .usageLimit: return "pause.circle.fill"
+        case .transient: return "bolt.horizontal.circle.fill"
+        }
+    }
+}
+
 struct StalledSession: Identifiable, Equatable {
     let sessionID: String
     let claudeSessionID: String
@@ -18,6 +47,7 @@ struct StalledSession: Identifiable, Equatable {
     let workspacePath: String
     let errorText: String
     let stalledAt: Date?
+    var kind: StallKind { StallKind.classify(errorText) }
 
     var id: String { sessionID }
 

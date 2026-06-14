@@ -42,8 +42,8 @@ Requirements: macOS 14+, [Conductor](https://conductor.build), and
 [Claude Code](https://claude.com/claude-code) logged in with a subscription.
 
 ```bash
-git clone https://github.com/jkkorn/night-conductor.git
-cd night-conductor/NightConductor
+git clone https://github.com/jkkorn/Night-Conductor.git
+cd Night-Conductor/NightConductor
 ./build-app.sh
 ```
 

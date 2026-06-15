@@ -6,7 +6,8 @@
 11pm. Night Conductor resumes them while you sleep — without blowing your
 weekly budget.**
 
-<p align="center"><img src="docs/popover.png" width="340" alt="Night Conductor popover: usage meters, budget decision, stalled sessions"></p>
+<p align="center"><img src="docs/day-cycle.gif" width="340" alt="Night Conductor popover — the header sky shifts with the time of day"></p>
+<p align="center"><em>The header is a living sky that follows the real clock — dusk, midnight, dawn.</em></p>
 
 A tiny macOS menu bar app. A moon lives in your menu bar. While you sleep, it
 watches your stalled Conductor sessions and your live Claude usage, and resumes

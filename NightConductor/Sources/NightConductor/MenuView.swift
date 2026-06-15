@@ -261,6 +261,9 @@ struct MenuView: View {
                     showActivity.toggle()
                 }
                 .accessibilityIdentifier("activityButton")
+                ToolbarIconButton(systemName: "square.and.arrow.up", label: "Share this week's stats") {
+                    StatCardExporter.share()
+                }
 
                 Spacer()
                 if let tick = state.lastTick {

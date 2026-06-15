@@ -27,6 +27,7 @@ final class AppState: ObservableObject {
     private var viewLoop: Task<Void, Never>?
     private var resumeLoop: Task<Void, Never>?
     private var lastUsageFetchAt: Date?
+    private var lastInWindow: Bool?
     // Guards against the resume loop and the manual "Resume now" button
     // running a resume pass at the same time (which could double-run a
     // session and bypass the per-night caps).
@@ -51,7 +52,11 @@ final class AppState: ObservableObject {
         set {
             objectWillChange.send()
             UserDefaults.standard.set(newValue, forKey: "armed")
-            if !newValue { PowerManager.preventIdleSleep(false) } // let it sleep
+            if newValue {
+                Notifications.requestAuthorizationIfNeeded() // for the morning summary
+            } else {
+                PowerManager.preventIdleSleep(false) // let it sleep
+            }
             log(newValue ? "Night watch armed" : "Night watch disarmed")
         }
     }
@@ -92,6 +97,7 @@ final class AppState: ObservableObject {
             start: config.startHour, end: config.endHour
         )
         PowerManager.preventIdleSleep(armed && inWindow)
+        checkMorningSummary(inWindow: inWindow, config: config)
 
         if let fresh = try? ConductorDB.findStalledSessions() {
             stalled = fresh
@@ -222,6 +228,13 @@ final class AppState: ObservableObject {
 
             night = night.recording(session.sessionID)
             night.save()
+            if result.ok {
+                ResumeHistory.record(ResumeEvent(
+                    date: Date(), title: session.title,
+                    kind: session.kind == .transient ? "transient" : "usage_limit",
+                    inConductor: resumedInsideConductor
+                ))
+            }
 
             // A UI resume hands the run to Conductor and returns immediately,
             // so its cost isn't measurable yet. One per tick keeps the
@@ -248,6 +261,21 @@ final class AppState: ObservableObject {
             }
         }
         stalled = (try? ConductorDB.findStalledSessions()) ?? []
+    }
+
+    /// When the watch window ends (the user's wake hour), post one morning
+    /// summary if anything was resumed overnight — at most once per night.
+    private func checkMorningSummary(inWindow: Bool, config: PolicyConfig) {
+        defer { lastInWindow = inWindow }
+        guard let was = lastInWindow, was, !inWindow else { return } // just ended
+        let nightKey = NightLedger.currentKey(startHour: config.startHour)
+        guard UserDefaults.standard.string(forKey: "lastSummaryNight") != nightKey else { return }
+        let count = NightLedger.load(startHour: config.startHour).total
+        UserDefaults.standard.set(nightKey, forKey: "lastSummaryNight")
+        guard count > 0 else { return }
+        let latest = ResumeHistory.load().sorted { $0.date > $1.date }.first?.title
+        Notifications.postMorningSummary(count: count, sampleTitle: latest)
+        log("🌅 Good morning — \(count) resumed overnight")
     }
 
     private func log(_ message: String) {

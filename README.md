@@ -89,6 +89,20 @@ python3 -m autoconduct status     # usage, stalled sessions, decision
 python3 -m autoconduct install    # launchd agent, ticks every 10 min
 ```
 
+## Raycast extension
+
+A companion [Raycast](https://raycast.com) extension lives in
+[`raycast/`](raycast/): a menu-bar command for live usage + stalled count,
+and a list view to resume stalled sessions — reading the same Conductor DB
+and usage endpoint.
+
+```bash
+cd raycast && npm install && npm run dev
+```
+
+It's a companion, not a replacement: the unattended overnight watching stays
+in the menu bar app; Raycast gives you the quick glance and manual resume.
+
 ## Good to know
 
 - **Read-only by design.** Night Conductor never writes to Conductor's

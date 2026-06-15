@@ -90,6 +90,14 @@ python3 -m autoconduct status     # usage, stalled sessions, decision
 python3 -m autoconduct install    # launchd agent, ticks every 10 min
 ```
 
+## Morning summary & weekly stats
+
+When the watch window ends, Night Conductor posts a one-line morning
+notification ("Resumed 3 sessions while you slept"). The share button in the
+footer renders a card of your week you can drop into a post:
+
+<p align="center"><img src="docs/stat-card.png" width="420" alt="Weekly stat card"></p>
+
 ## Raycast extension
 
 A companion [Raycast](https://raycast.com) extension lives in

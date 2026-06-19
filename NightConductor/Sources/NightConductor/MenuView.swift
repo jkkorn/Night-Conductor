@@ -63,7 +63,10 @@ struct MenuView: View {
         }
         .padding(Design.l)
         .frame(width: 340)
-        .onAppear { Task { await state.refreshUsage(force: false) } } // fresh when opened (throttled)
+        // Opening the popover is an explicit "show me now". If the cached
+        // reading is stale, force a refresh (which also punches through a 429
+        // backoff); if it's already fresh, stay throttled to avoid hammering.
+        .onAppear { Task { await state.refreshUsage(force: !state.usageIsFresh()) } }
     }
 
     // Living night-sky header: a drifting aurora + twinkling starfield, with

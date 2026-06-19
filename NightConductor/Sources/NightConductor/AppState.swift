@@ -141,7 +141,10 @@ final class AppState: ObservableObject {
         let inBackoff = (usageBackoffUntil.map { now < $0 }) ?? false
         let age = now.timeIntervalSince(lastUsageFetchAt ?? .distantPast)
         let threshold = Self.usageRefreshInterval + usageJitter
-        if !inBackoff, force || usage == nil || age > threshold {
+        if Self.shouldFetchUsage(
+            force: force, hasUsage: usage != nil, fresh: usageIsFresh(now),
+            inBackoff: inBackoff, age: age, threshold: threshold
+        ) {
             do {
                 usage = try await UsageClient.fetchUsage()
                 lastUsageFetchAt = Date()
@@ -159,6 +162,19 @@ final class AppState: ObservableObject {
         }
         _ = recomputeDecision(config: PolicyConfig.fromDefaults())
         return usageIsFresh(now)
+    }
+
+    /// Whether to attempt a usage fetch. The 429 backoff throttles polling of
+    /// data we ALREADY have fresh, but must never strand us on a stale reading:
+    /// a stale "you're maxed" value makes us hold all night when there's really
+    /// headroom (max backoff is 30m, staleness is 15m, so a backoff alone
+    /// guarantees such a window). Once the cached data is stale, always retry.
+    nonisolated static func shouldFetchUsage(
+        force: Bool, hasUsage: Bool, fresh: Bool,
+        inBackoff: Bool, age: TimeInterval, threshold: TimeInterval
+    ) -> Bool {
+        let blockedByBackoff = inBackoff && fresh
+        return !blockedByBackoff && (force || !hasUsage || age > threshold)
     }
 
     func usageIsFresh(_ now: Date = Date()) -> Bool {

@@ -31,6 +31,7 @@ final class AppState: ObservableObject {
     private var usageBackoffUntil: Date?   // set on a 429, grows exponentially
     private var usageBackoffStep = 0
     private var usageJitter: Double = 0     // randomized offset so polls desync
+    private var signInExpired = false       // Claude Code token expired → tell the user
     private var lastInWindow: Bool?
     private var lastClaudeCodeScan: Date?
     private var cachedClaudeCode: [StalledSession] = []
@@ -150,12 +151,18 @@ final class AppState: ObservableObject {
                 lastUsageFetchAt = Date()
                 usageBackoffUntil = nil
                 usageBackoffStep = 0
+                signInExpired = false
                 usageJitter = Double(Int.random(in: 0...45)) // re-roll for next time
             } catch let error as UsageError where error.isRateLimited {
                 let delays = [300.0, 600.0, 1200.0, 1800.0] // 5, 10, 20, 30 min
                 usageBackoffStep = min(usageBackoffStep + 1, delays.count)
                 usageBackoffUntil = now.addingTimeInterval(delays[usageBackoffStep - 1])
                 log("Usage rate-limited — backing off \(Int(delays[usageBackoffStep - 1] / 60))m")
+            } catch let error as UsageError where error.isSignInExpired {
+                // The fetch was skipped/refused because the Claude Code token
+                // expired. No backoff (the call is cheap and we never hit the
+                // network) — just surface it so the user knows to refresh.
+                signInExpired = true
             } catch {
                 // transient / network — keep the cached reading
             }
@@ -191,11 +198,15 @@ final class AppState: ObservableObject {
             )
             return true
         }
-        decision = Decision(
-            resume: false,
-            reason: usage == nil ? "Checking usage…" : "Usage data is stale — holding",
-            state: .checking
-        )
+        let reason: String
+        if signInExpired {
+            reason = "Claude sign-in expired — open Claude Code or Conductor to refresh"
+        } else if usage == nil {
+            reason = "Checking usage…"
+        } else {
+            reason = "Usage data is stale — holding"
+        }
+        decision = Decision(resume: false, reason: reason, state: .checking)
         return false
     }
 

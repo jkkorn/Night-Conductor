@@ -25,6 +25,7 @@ final class AppState: ObservableObject {
     static let usageRefreshInterval: TimeInterval = 180   // 3 min
     static let usageStaleAfter: TimeInterval = 900        // 15 min → treat as unavailable
     static let maxAttemptsPerPass = 8                     // bound a pass when sessions fail
+    static let transientCooldown: TimeInterval = 300      // 5 min before retrying a server rate-limit
 
     private var viewLoop: Task<Void, Never>?
     private var resumeLoop: Task<Void, Never>?
@@ -204,6 +205,21 @@ final class AppState: ObservableObject {
         return !blockedByBackoff && (force || !hasUsage || age > threshold)
     }
 
+    /// Whether the auto loop should resume this session now. Pinned sessions run
+    /// around the clock; the rest only inside the night window (`nightOK`). A
+    /// session stalled on a TRANSIENT server rate-limit ("temporarily limiting
+    /// requests") gets a cool-down first, so the loop never bounces straight
+    /// back into the same limit and re-triggers it. Manual "Resume now" skips
+    /// this (it doesn't run through here).
+    nonisolated static func autoResumeEligible(
+        _ session: StalledSession, nightOK: Bool, pins: Set<String>, now: Date
+    ) -> Bool {
+        guard nightOK || pins.contains(session.claudeSessionID) else { return false }
+        if session.kind == .transient, let at = session.stalledAt,
+           now.timeIntervalSince(at) < transientCooldown { return false }
+        return true
+    }
+
     func usageIsFresh(_ now: Date = Date()) -> Bool {
         guard usage != nil, let at = lastUsageFetchAt else { return false }
         return now.timeIntervalSince(at) <= Self.usageStaleAfter
@@ -243,7 +259,7 @@ final class AppState: ObservableObject {
         guard Policy.budgetAllows(usage: usage, config: config, now: now).resume else { return }
         let nightOK = Policy.shouldResume(usage: usage, config: config, now: now).resume
         let pins = pinnedIDs
-        let eligible = stalled.filter { nightOK || pins.contains($0.claudeSessionID) }
+        let eligible = stalled.filter { Self.autoResumeEligible($0, nightOK: nightOK, pins: pins, now: now) }
         guard !eligible.isEmpty else { return }
         await resumeStalledSessions(sessions: eligible, config: config, manual: false)
     }

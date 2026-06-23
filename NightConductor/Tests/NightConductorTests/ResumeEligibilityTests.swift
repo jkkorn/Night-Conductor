@@ -45,4 +45,17 @@ final class ResumeEligibilityTests: XCTestCase {
         XCTAssertEqual(AppState.paceSeconds(60), 1200)  // clamped down to 20
         XCTAssertEqual(AppState.paceSeconds(nil), 600)  // unset -> default
     }
+
+    // Manual "Resume now" must resume the WHOLE list; an auto pass stops after
+    // one success to spread the night's work. (Regression: a manual pass used
+    // to stop after the first in-app resume, so "some didn't resume".)
+    func testManualPassResumesAllAutoStopsAfterOne() {
+        // Auto: stop after any success (handed to app or headless).
+        XCTAssertTrue(AppState.shouldStopPass(manual: false, handedToApp: true, resultOK: true))
+        XCTAssertTrue(AppState.shouldStopPass(manual: false, handedToApp: false, resultOK: true))
+        XCTAssertFalse(AppState.shouldStopPass(manual: false, handedToApp: false, resultOK: false)) // failed: keep going
+        // Manual: never stop, even after an in-app resume.
+        XCTAssertFalse(AppState.shouldStopPass(manual: true, handedToApp: true, resultOK: true))
+        XCTAssertFalse(AppState.shouldStopPass(manual: true, handedToApp: false, resultOK: true))
+    }
 }

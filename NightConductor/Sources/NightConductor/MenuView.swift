@@ -427,6 +427,7 @@ struct SettingsPane: View {
     @AppStorage("fiveHourCeiling") private var fiveHourCeiling = 85.0
     @AppStorage("weeklyCeiling") private var weeklyCeiling = 90.0
     @AppStorage("resumePaceMinutes") private var resumePaceMinutes = 10.0
+    @AppStorage("aroundTheClock") private var aroundTheClock = false
     @AppStorage("uiResume") private var uiResume = true
     @AppStorage("menuBarUsage") private var menuBarUsage = true
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
@@ -446,6 +447,13 @@ struct SettingsPane: View {
                 HourStepper(hour: $endHour)
             }
             Text("Nothing starts after \(((endHour - 5) + 24) % 24):00, so your 5-hour window is fresh when you sit down.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Toggle("Resume around the clock", isOn: $aroundTheClock)
+                .font(.caption)
+                .toggleStyle(.checkbox)
+            Text("Resumes whenever there's budget, not just at night, and keeps your Mac awake so it's ready the moment your limit resets. Best when you're plugged in. Ignores the hours above.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)

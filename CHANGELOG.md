@@ -2,6 +2,20 @@
 
 All notable changes to Night Conductor. Dates are when the release was cut.
 
+## 1.0.5
+
+### Added
+- "Resume around the clock" toggle. When on, the watch resumes whenever there's
+  budget (not just the night window) and keeps the Mac awake while armed, so it
+  is ready to resume the moment your limit resets, any time of day. Off by
+  default; best when you're plugged in.
+
+### Fixed
+- "Resume now" stopped after the first session that resumed inside Conductor or
+  the Claude app (once Accessibility was granted), so the rest were left stalled.
+  A manual resume now goes through the whole list. An auto pass still resumes one
+  per tick to spread the night's work.
+
 ## 1.0.4
 
 ### Added

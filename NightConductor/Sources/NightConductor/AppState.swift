@@ -54,6 +54,7 @@ final class AppState: ObservableObject {
             "fiveHourCeiling": 85.0,
             "weeklyCeiling": 90.0,
             "resumePaceMinutes": 10.0,
+            "aroundTheClock": false,
         ])
         if forScreenshots { return } // inert state; data injected by caller
         // No accessibility prompt at launch — that nags on every relaunch.
@@ -74,6 +75,11 @@ final class AppState: ObservableObject {
             log(newValue ? "Night watch armed" : "Night watch disarmed")
         }
     }
+
+    /// When on, the watch resumes whenever there's budget (not just the night
+    /// window) and keeps the Mac awake while armed, so it's always ready to
+    /// resume the moment your limit resets, any time of day.
+    var aroundTheClock: Bool { UserDefaults.standard.bool(forKey: "aroundTheClock") }
 
     func start() {
         viewLoop?.cancel()
@@ -134,7 +140,9 @@ final class AppState: ObservableObject {
             hour: Calendar.current.component(.hour, from: Date()),
             start: config.startHour, end: config.endHour
         )
-        PowerManager.preventIdleSleep(armed && inWindow)
+        // Around-the-clock keeps the Mac awake whenever armed, so it's ready to
+        // resume the instant a limit resets; otherwise only during the window.
+        PowerManager.preventIdleSleep(armed && (aroundTheClock || inWindow))
         checkMorningSummary(inWindow: inWindow, config: config)
         stalled = await combinedStalled()
         lastTick = Date()
@@ -225,6 +233,13 @@ final class AppState: ObservableObject {
         min(20, max(5, minutes ?? 10)) * 60
     }
 
+    /// Stop a resume pass after a success only when it's NOT manual: an auto
+    /// pass resumes one session per tick to spread the night's work, while a
+    /// manual "Resume now" resumes the whole list.
+    nonisolated static func shouldStopPass(manual: Bool, handedToApp: Bool, resultOK: Bool) -> Bool {
+        !manual && (handedToApp || resultOK)
+    }
+
     /// Whether the auto loop should resume this session now. Pinned sessions run
     /// around the clock; the rest only inside the night window (`nightOK`). A
     /// session stalled on a TRANSIENT server rate-limit ("temporarily limiting
@@ -277,7 +292,9 @@ final class AppState: ObservableObject {
         // Never overspend. But resume PINNED sessions around the clock, and
         // every stalled session during the night window.
         guard Policy.budgetAllows(usage: usage, config: config, now: now).resume else { return }
-        let nightOK = Policy.shouldResume(usage: usage, config: config, now: now).resume
+        // Around-the-clock resumes whenever budget allows (the guard above),
+        // bypassing the night window. Otherwise only inside the watch window.
+        let nightOK = aroundTheClock || Policy.shouldResume(usage: usage, config: config, now: now).resume
         let pins = pinnedIDs
         let eligible = stalled.filter { Self.autoResumeEligible($0, nightOK: nightOK, pins: pins, now: now) }
         guard !eligible.isEmpty else { return }
@@ -443,19 +460,17 @@ final class AppState: ObservableObject {
                 night.save()
             }
 
-            // Spread it out: an auto pass resumes ONE session per tick, so the
-            // night's budget trickles out across the window instead of
-            // bursting. The next (jittered) tick re-checks budget and takes
-            // the next session. A manual pass keeps going through the list.
-            if handedToApp {
-                log("Handed to \(session.source.label), next session shortly")
+            // Spread it out: an AUTO pass resumes ONE session per tick so the
+            // night's budget trickles out instead of bursting; the next tick
+            // takes the next session. A MANUAL pass ("Resume now") keeps going
+            // through the whole list, so clicking it resumes everything.
+            if Self.shouldStopPass(manual: manual, handedToApp: handedToApp, resultOK: result.ok) {
+                log(handedToApp
+                    ? "Handed to \(session.source.label), next session shortly"
+                    : "Resumed \(session.title), spacing out, next at the next cycle")
                 break
             }
-            if result.ok, !manual {
-                log("Resumed \(session.title), spacing out, next at the next cycle")
-                break
-            }
-            // Otherwise (failed, or a manual headless run) try the next now.
+            // Manual passes, and failed auto attempts, continue to the next.
         }
         stalled = await combinedStalled()
     }

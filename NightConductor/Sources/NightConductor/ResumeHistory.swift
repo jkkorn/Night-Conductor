@@ -30,6 +30,14 @@ enum ResumeHistory {
         return events
     }
 
+    /// Newest-first, capped — the durable "what was resumed" feed for the
+    /// Activity panel. Reads the same persisted store as the weekly stat, so it
+    /// survives relaunches (unlike the in-memory session log, which starts empty
+    /// every launch and so looked blank even after a busy night).
+    static func recent(limit: Int = 40, defaults: UserDefaults = .standard) -> [ResumeEvent] {
+        Array(load(defaults: defaults).sorted { $0.date > $1.date }.prefix(max(0, limit)))
+    }
+
     static func count(within interval: TimeInterval, now: Date = Date(),
                       defaults: UserDefaults = .standard) -> Int {
         let cutoff = now.addingTimeInterval(-interval)

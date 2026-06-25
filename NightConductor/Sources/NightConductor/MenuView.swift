@@ -272,21 +272,47 @@ struct MenuView: View {
         .hoverLift()
     }
 
+    // The Activity panel shows the DURABLE resume history (what was resumed and
+    // when), read from the same persisted store as the weekly stat. It used to
+    // render only `state.activity` — the in-memory session log, which is empty
+    // on every launch, so it looked blank even after the watch resumed all
+    // night. The live session log is kept below as a dim, secondary trace.
     private var activityLog: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 3) {
-                ForEach(state.activity, id: \.self) { line in
-                    Text(line).font(.caption2.monospaced())
-                        .foregroundStyle(.secondary)
+        let resumes = ResumeHistory.recent(limit: 40)
+        return ScrollView {
+            VStack(alignment: .leading, spacing: Design.m) {
+                VStack(alignment: .leading, spacing: 4) {
+                    activitySectionLabel("Recent resumes")
+                    if resumes.isEmpty {
+                        Text("Nothing resumed yet. Sessions you leave stalled on the limit show up here once the watch picks them back up.")
+                            .font(.caption2).foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        ForEach(Array(resumes.enumerated()), id: \.offset) { _, event in
+                            ActivityRow(event: event)
+                        }
+                    }
                 }
-                if state.activity.isEmpty {
-                    Text("Nothing yet tonight.")
-                        .font(.caption2).foregroundStyle(.tertiary)
+                if !state.activity.isEmpty {
+                    VStack(alignment: .leading, spacing: 3) {
+                        activitySectionLabel("This session")
+                        ForEach(state.activity.prefix(12), id: \.self) { line in
+                            Text(line).font(.caption2.monospaced())
+                                .foregroundStyle(.tertiary).lineLimit(1)
+                        }
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxHeight: 110)
+        .frame(maxHeight: 180)
+    }
+
+    private func activitySectionLabel(_ text: String) -> some View {
+        Text(text.uppercased())
+            .font(.system(size: 9, weight: .semibold))
+            .tracking(0.6)
+            .foregroundStyle(.tertiary)
     }
 
     private var footer: some View {
@@ -318,6 +344,49 @@ struct MenuView: View {
                     .controlSize(.small)
             }
         }
+    }
+}
+
+/// One row in the Activity panel: the brand moon (the night watch did this),
+/// the session title, an "in app" tag when the resume landed inside Conductor
+/// or the Claude app (so the chat stayed in sync), and a day-aware timestamp.
+private struct ActivityRow: View {
+    let event: ResumeEvent
+
+    var body: some View {
+        HStack(spacing: Design.m) {
+            Image(systemName: "moon.fill")
+                .font(.system(size: 9))
+                .foregroundStyle(Color.indigo)
+            Text(event.title)
+                .font(.caption)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: Design.s)
+            if event.inConductor {
+                Text("in app")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.tertiary)
+            }
+            Text(Self.stamp(event.date))
+                .font(.caption2.monospaced())
+                .foregroundStyle(.secondary)
+                .layoutPriority(1)
+        }
+    }
+
+    /// Day-aware so each row stays one line and is unambiguous across nights:
+    /// just the time for today, weekday + time within the past week, otherwise
+    /// a short date.
+    static func stamp(_ date: Date, now: Date = Date()) -> String {
+        let cal = Calendar.current
+        if cal.isDateInToday(date) {
+            return date.formatted(date: .omitted, time: .shortened)
+        }
+        if let weekAgo = cal.date(byAdding: .day, value: -7, to: now), date >= weekAgo {
+            return date.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+        }
+        return date.formatted(.dateTime.month(.abbreviated).day().hour().minute())
     }
 }
 

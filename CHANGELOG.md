@@ -2,6 +2,19 @@
 
 All notable changes to Night Conductor. Dates are when the release was cut.
 
+## 1.0.9
+
+### Added
+- A first-run "Finish setup" card in the popover. Most setup is automatic now,
+  so it mainly guides the one manual step, granting Accessibility, and explains
+  that without it resumes still run but in the background instead of inside
+  Conductor. It hides once granted, or you can dismiss it.
+
+### Fixed
+- The morning summary is no longer lost when the Mac was asleep or the app was
+  not running at the exact moment the watch window closed. It is now caught up
+  on the next launch, still at most once per night.
+
 ## 1.0.8
 
 ### Added

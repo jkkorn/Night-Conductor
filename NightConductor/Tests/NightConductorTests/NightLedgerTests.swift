@@ -92,6 +92,30 @@ final class NightLedgerBudgetTests: XCTestCase {
         XCTAssertEqual(s.ledgerKey, "only-id")
     }
 
+    // The morning summary is edge-triggered live; a level-triggered catch-up
+    // must post it after a missed window-close (Mac asleep or app not running).
+    func testMorningCatchUpDecision() {
+        // In the window: never catch up.
+        XCTAssertFalse(AppState.morningCatchUp(
+            inWindow: true, lastSummaryNight: nil, nightKey: "2026-07-03", total: 5).mark)
+        // Out of window, unseen night, resumes happened: mark and post.
+        let fresh = AppState.morningCatchUp(
+            inWindow: false, lastSummaryNight: "2026-07-02", nightKey: "2026-07-03", total: 5)
+        XCTAssertTrue(fresh.mark)
+        XCTAssertTrue(fresh.post)
+        // Out of window, unseen night, but nothing resumed: mark it handled to
+        // stop re-checking, yet do not post an empty summary.
+        let empty = AppState.morningCatchUp(
+            inWindow: false, lastSummaryNight: nil, nightKey: "2026-07-03", total: 0)
+        XCTAssertTrue(empty.mark)
+        XCTAssertFalse(empty.post)
+        // Already summarized this night (e.g. the live path fired): do nothing.
+        let done = AppState.morningCatchUp(
+            inWindow: false, lastSummaryNight: "2026-07-03", nightKey: "2026-07-03", total: 5)
+        XCTAssertFalse(done.mark)
+        XCTAssertFalse(done.post)
+    }
+
     private func makeDefaults() -> UserDefaults {
         let suite = "NightLedgerTests-\(UUID().uuidString)"
         let d = UserDefaults(suiteName: suite)!

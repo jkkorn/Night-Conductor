@@ -44,6 +44,12 @@ struct MenuView: View {
     @EnvironmentObject var state: AppState
     @State private var showSettings: Bool
     @State private var showActivity = false
+    @AppStorage("setupDismissed") private var setupDismissed = false
+    // AXIsProcessTrusted() is only re-read on render, so poll while the card is
+    // showing — the checkmark should flip within seconds of granting, matching
+    // the identical pattern in SettingsPane below.
+    @State private var hasAccessibility = UIResumer.hasAccessibilityPermission
+    private let setupPermissionTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
     private let maxStalledRows = 6 // render this many; the rest auto-resume
 
     init(showSettings: Bool = false) {
@@ -53,6 +59,7 @@ struct MenuView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Design.l) {
             header
+            setupCard
             usageSection
             decisionRow
             stalledSection
@@ -70,6 +77,9 @@ struct MenuView: View {
         .onAppear {
             guard !state.isScreenshot else { return }
             Task { await state.refreshUsage(force: !state.usageIsFresh()) }
+        }
+        .onReceive(setupPermissionTimer) { _ in
+            hasAccessibility = UIResumer.hasAccessibilityPermission
         }
     }
 
@@ -130,6 +140,53 @@ struct MenuView: View {
             RoundedRectangle(cornerRadius: 16)
                 .strokeBorder(.white.opacity(0.08), lineWidth: 0.5) // crisp edge
         )
+    }
+
+    /// First-run guidance. The automatic steps show as done for reassurance;
+    /// the one manual step (Accessibility) carries the action. Reuses glassCard
+    /// so it matches the rest of the popover, and hides once Accessibility is
+    /// granted or the user dismisses it.
+    @ViewBuilder
+    private var setupCard: some View {
+        if SetupStatus.shouldShow(
+            accessibilityGranted: hasAccessibility,
+            dismissed: setupDismissed, isScreenshot: state.isScreenshot
+        ) {
+            VStack(alignment: .leading, spacing: Design.m) {
+                HStack {
+                    Text("Finish setup").font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Button { withAnimation { setupDismissed = true } } label: {
+                        Image(systemName: "xmark").font(.caption2)
+                    }
+                    .buttonStyle(.plain).foregroundStyle(.secondary).help("Dismiss")
+                }
+                setupStep(done: state.armed, "Night watch armed")
+                setupStep(done: LoginItem.isEnabled, "Launches at login")
+                setupStep(done: state.usage != nil, "Reading your Claude usage")
+                setupStep(done: hasAccessibility, "Accessibility, so resumes show inside Conductor")
+                Text("Without it, resumes still run, just in the background instead of in Conductor's chat.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Open Accessibility Settings…") {
+                    UIResumer.openAccessibilitySettings()
+                }
+                .controlSize(.small)
+            }
+            .glassCard()
+        }
+    }
+
+    private func setupStep(done: Bool, _ label: String) -> some View {
+        HStack(spacing: Design.s) {
+            Image(systemName: done ? "checkmark.circle.fill" : "circle")
+                .font(.caption)
+                .foregroundStyle(done ? Color.green : Color.secondary)
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(done ? Color.secondary : Color.primary)
+                .strikethrough(done, color: .secondary)
+        }
     }
 
     private var subtitle: String {

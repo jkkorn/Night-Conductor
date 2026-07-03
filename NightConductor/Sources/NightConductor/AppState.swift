@@ -97,6 +97,10 @@ final class AppState: ObservableObject {
             PowerLog.closeOpenSpan(lastAlive: lastAlive)
             HoldLog.closeOpenSpan(lastAlive: lastAlive)
         }
+        // If the Mac slept or the app was not running when last night's window
+        // closed, the live edge that posts the morning summary was never seen.
+        // Catch it up now (idempotent via lastSummaryNight).
+        catchUpMorningSummary(config: PolicyConfig.fromDefaults())
         Task { [weak self] in await self?.refreshUsage(force: true) } // populate meters once at launch
         Task { [weak self] in await self?.checkForUpdates() }         // notify if a newer release exists
         viewLoop = Task { [weak self] in
@@ -532,6 +536,45 @@ final class AppState: ObservableObject {
         let latest = ResumeHistory.load().sorted { $0.date > $1.date }.first?.title
         Notifications.postMorningSummary(count: count, sampleTitle: latest)
         log("🌅 Good morning, \(count) resumed overnight")
+    }
+
+    /// The live `checkMorningSummary` is edge-triggered: it fires only when the
+    /// app is running and observes the window close. If the Mac slept or the app
+    /// was not up at that moment, the summary is lost. This level-triggered
+    /// catch-up runs once at launch: if we are past a night that had resumes and
+    /// has not been summarized, post it now. Shares `lastSummaryNight` with the
+    /// live path, so the two can never double-post.
+    private func catchUpMorningSummary(config: PolicyConfig) {
+        let now = Date()
+        let inWindow = Policy.inActiveHours(
+            hour: Calendar.current.component(.hour, from: now),
+            start: config.startHour, end: config.endHour
+        )
+        let nightKey = NightLedger.currentKey(startHour: config.startHour)
+        let total = NightLedger.load(startHour: config.startHour).total
+        let action = Self.morningCatchUp(
+            inWindow: inWindow,
+            lastSummaryNight: UserDefaults.standard.string(forKey: "lastSummaryNight"),
+            nightKey: nightKey, total: total
+        )
+        guard action.mark else { return }
+        UserDefaults.standard.set(nightKey, forKey: "lastSummaryNight")
+        lastInWindow = inWindow // seed the live edge detector so it agrees
+        guard action.post else { return }
+        let latest = ResumeHistory.load().sorted { $0.date > $1.date }.first?.title
+        Notifications.postMorningSummary(count: total, sampleTitle: latest)
+        log("🌅 Good morning, \(total) resumed overnight")
+    }
+
+    /// Pure decision for the launch-time catch-up. `mark` records the night as
+    /// handled (so we stop re-checking, even a zero-resume night — mirroring the
+    /// live path); `post` actually shows the summary, only when something was
+    /// resumed and we are past the window.
+    nonisolated static func morningCatchUp(
+        inWindow: Bool, lastSummaryNight: String?, nightKey: String, total: Int
+    ) -> (mark: Bool, post: Bool) {
+        guard !inWindow, lastSummaryNight != nightKey else { return (false, false) }
+        return (mark: true, post: total > 0)
     }
 
     private func log(_ message: String) {

@@ -6,8 +6,8 @@
 # On each release, bump `version` and `sha256` (shasum -a 256 <zip>).
 # Until the app is notarized, installs should add --no-quarantine (see caveats).
 cask "night-conductor" do
-  version "1.0.7"
-  sha256 "9beca8e7f337e1fd8ad5b361bf3b27fd12be4b242786a0786c8916bb6d0586ed"
+  version "1.0.9"
+  sha256 "51e5dd11dda2d34d906bee3a8b8950562511312ce1e8d00246cbc8d01ff40ef2"
 
   url "https://github.com/jkkorn/Night-Conductor/releases/download/v#{version}/Night-Conductor-#{version}.zip"
   name "Night Conductor"

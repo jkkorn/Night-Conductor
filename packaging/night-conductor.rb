@@ -3,11 +3,14 @@
 # To publish: create a tap repo at github.com/jkkorn/homebrew-tap and put this
 # file at Casks/night-conductor.rb. Users then run:
 #   brew install --cask jkkorn/tap/night-conductor
-# On each release, bump `version` and `sha256` (shasum -a 256 <zip>).
+# On each release, bump `version` and `sha256` (shasum -a 256 <zip>). Ad-hoc
+# codesign is not reproducible, so re-running build-app.sh on identical source
+# still changes the sha256 — always take it from the exact zip you upload as
+# the release asset, not an earlier build.
 # Until the app is notarized, installs should add --no-quarantine (see caveats).
 cask "night-conductor" do
   version "1.0.9"
-  sha256 "51e5dd11dda2d34d906bee3a8b8950562511312ce1e8d00246cbc8d01ff40ef2"
+  sha256 "5f561482cb0c973329906a0992722bc947c08509761ddba35f2a0cc51393baaf"
 
   url "https://github.com/jkkorn/Night-Conductor/releases/download/v#{version}/Night-Conductor-#{version}.zip"
   name "Night Conductor"

@@ -19,6 +19,25 @@ DEFAULTS = {
         "Continue where you left off. Finish the task you were working on. "
         "If everything is already done, reply DONE and stop."
     ),
+    # --- Orchestrator (autoconduct orchestrate) ---
+    # Map a subtask's estimated complexity tier to a Claude model id. The
+    # router downshifts these toward the cheaper end when the weekly budget
+    # is tight — the "use the right model for the job" outcomemaxxing lever.
+    "model_tiers": {
+        "light": "claude-haiku-4-5",
+        "standard": "claude-sonnet-5",
+        "heavy": "claude-opus-4-8",
+    },
+    # Model used for the up-front decomposition of a goal into a task DAG.
+    "planner_model": "claude-opus-4-8",
+    "max_concurrency": 3,  # most subtasks to run in parallel when budget allows
+    "max_nodes_per_run": 20,  # hard cap on decomposition size (spend guardrail)
+    "orchestrate_permission_mode": "acceptEdits",
+    # Weekly headroom (allowed% - used%) thresholds that gate parallelism and
+    # model tier. Above `high` → full concurrency + full tiers; between → a
+    # middle gear; below `low` → serialize and downshift; ≤0 → pause the run.
+    "headroom_high": 25.0,
+    "headroom_low": 8.0,
 }
 
 
@@ -31,6 +50,13 @@ class Config:
     max_sessions_per_night: int
     permission_mode: str
     resume_prompt: str
+    model_tiers: dict[str, str]
+    planner_model: str
+    max_concurrency: int
+    max_nodes_per_run: int
+    orchestrate_permission_mode: str
+    headroom_high: float
+    headroom_low: float
 
 
 def default_config() -> Config:
@@ -42,6 +68,13 @@ def default_config() -> Config:
         max_sessions_per_night=DEFAULTS["max_sessions_per_night"],
         permission_mode=DEFAULTS["permission_mode"],
         resume_prompt=DEFAULTS["resume_prompt"],
+        model_tiers=dict(DEFAULTS["model_tiers"]),
+        planner_model=DEFAULTS["planner_model"],
+        max_concurrency=DEFAULTS["max_concurrency"],
+        max_nodes_per_run=DEFAULTS["max_nodes_per_run"],
+        orchestrate_permission_mode=DEFAULTS["orchestrate_permission_mode"],
+        headroom_high=DEFAULTS["headroom_high"],
+        headroom_low=DEFAULTS["headroom_low"],
     )
 
 

@@ -7,7 +7,14 @@ import Foundation
 /// Conductor. It shows until that is granted, unless the user dismisses it,
 /// and never during an offscreen documentation render.
 enum SetupStatus {
-    static func shouldShow(accessibilityGranted: Bool, dismissed: Bool, isScreenshot: Bool) -> Bool {
-        !isScreenshot && !dismissed && !accessibilityGranted
+    static func shouldShow(accessibilityGranted: Bool, dismissed: Bool,
+                           isScreenshot: Bool, hasBlockedSessions: Bool = false) -> Bool {
+        if isScreenshot || accessibilityGranted { return false }
+        // Dismissal is respected until a session is ACTUALLY blocked on the
+        // missing permission, then re-raise: "I can't act" must not be
+        // dismissable into silence. This closes the permanent-dismissal hole,
+        // where an unsigned reinstall drops Accessibility but the card, once
+        // dismissed, never came back.
+        return !dismissed || hasBlockedSessions
     }
 }

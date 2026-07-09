@@ -148,26 +148,42 @@ struct MenuView: View {
     /// granted or the user dismisses it.
     @ViewBuilder
     private var setupCard: some View {
+        // Claude Desktop (Cowork) resume is Accessibility-only, no fallback, so a
+        // stalled Cowork session with Accessibility off is fully blocked, and the
+        // card must re-raise even if the user dismissed it. Conductor sessions
+        // fall back to headless, so they are not blocked, just invisible in chat.
+        let blockedCount = state.stalled.filter { $0.source == .claudeDesktop }.count
+        let blocked = !hasAccessibility && blockedCount > 0
         if SetupStatus.shouldShow(
-            accessibilityGranted: hasAccessibility,
-            dismissed: setupDismissed, isScreenshot: state.isScreenshot
+            accessibilityGranted: hasAccessibility, dismissed: setupDismissed,
+            isScreenshot: state.isScreenshot, hasBlockedSessions: blocked
         ) {
             VStack(alignment: .leading, spacing: Design.m) {
                 HStack {
-                    Text("Finish setup").font(.subheadline.weight(.semibold))
+                    Text(blocked ? "Action needed" : "Finish setup")
+                        .font(.subheadline.weight(.semibold))
                     Spacer()
-                    Button { withAnimation { setupDismissed = true } } label: {
-                        Image(systemName: "xmark").font(.caption2)
+                    if !blocked {  // can't dismiss into silence while a session is blocked
+                        Button { withAnimation { setupDismissed = true } } label: {
+                            Image(systemName: "xmark").font(.caption2)
+                        }
+                        .buttonStyle(.plain).foregroundStyle(.secondary).help("Dismiss")
                     }
-                    .buttonStyle(.plain).foregroundStyle(.secondary).help("Dismiss")
+                }
+                if blocked {
+                    Text("\(blockedCount) Claude app session\(blockedCount == 1 ? "" : "s") stalled that I can't resume without Accessibility.")
+                        .font(.caption).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 setupStep(done: state.armed, "Night watch armed")
                 setupStep(done: LoginItem.isEnabled, "Launches at login")
                 setupStep(done: state.usage != nil, "Reading your Claude usage")
-                setupStep(done: hasAccessibility, "Accessibility, so resumes show inside Conductor")
-                Text("Without it, resumes still run, just in the background instead of in Conductor's chat.")
-                    .font(.caption2).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                setupStep(done: hasAccessibility, "Accessibility, so resumes show inside the app")
+                if !blocked {
+                    Text("Without it, resumes still run, just in the background instead of in the app's chat.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 Button("Open Accessibility Settings…") {
                     UIResumer.openAccessibilitySettings()
                 }
@@ -381,6 +397,7 @@ struct MenuView: View {
         let since = Date().addingTimeInterval(-24 * 3600)
         let awake = PowerLog.awakeSeconds(since: since)
         let resumes = ResumeHistory.count(within: 24 * 3600)
+        let background = ResumeHistory.backgroundCount(within: 24 * 3600)
         let longestHold = HoldLog.longestHold(since: since)
         return VStack(alignment: .leading, spacing: 4) {
             activitySectionLabel("Last 24 hours")
@@ -395,6 +412,11 @@ struct MenuView: View {
             Text("Kept awake \(awakeText(awake)) and resumed \(resumes) session\(resumes == 1 ? "" : "s").")
                 .font(.caption2).foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
+            if background > 0 {
+                Text("Background resumes land in your workspace, not the chat.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             // Only shown when something actually blocked resuming — silent on
             // a normal night, so this reads as a real answer to "why didn't it
             // resume anything," not routine noise.

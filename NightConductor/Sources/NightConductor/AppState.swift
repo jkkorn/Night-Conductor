@@ -534,7 +534,8 @@ final class AppState: ObservableObject {
         UserDefaults.standard.set(nightKey, forKey: "lastSummaryNight")
         guard count > 0 else { return }
         let latest = ResumeHistory.load().sorted { $0.date > $1.date }.first?.title
-        Notifications.postMorningSummary(count: count, sampleTitle: latest)
+        let background = ResumeHistory.backgroundCount(within: 12 * 3600)
+        Notifications.postMorningSummary(count: count, sampleTitle: latest, backgroundCount: background)
         log("🌅 Good morning, \(count) resumed overnight")
     }
 
@@ -562,7 +563,8 @@ final class AppState: ObservableObject {
         lastInWindow = inWindow // seed the live edge detector so it agrees
         guard action.post else { return }
         let latest = ResumeHistory.load().sorted { $0.date > $1.date }.first?.title
-        Notifications.postMorningSummary(count: total, sampleTitle: latest)
+        let background = ResumeHistory.backgroundCount(within: 12 * 3600)
+        Notifications.postMorningSummary(count: total, sampleTitle: latest, backgroundCount: background)
         log("🌅 Good morning, \(total) resumed overnight")
     }
 

@@ -2,6 +2,20 @@
 
 All notable changes to Night Conductor. Dates are when the release was cut.
 
+## 1.0.10
+
+### Added
+- The morning summary now tells you where to look. When a session was resumed in
+  the background (which lands the work in your workspace but never updates the
+  host app's chat), it says to check your workspace diffs, not the chat, so a
+  working night stops looking like a broken one. The Activity panel says the same.
+
+### Fixed
+- A missing permission can no longer hide. If a Claude app (Cowork) session is
+  stalled and cannot be resumed because Accessibility is off, the setup card
+  re-raises even if you dismissed it, names how many sessions are blocked, and
+  will not let you dismiss it back into silence until the permission is granted.
+
 ## 1.0.9
 
 ### Added

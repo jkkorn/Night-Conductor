@@ -17,4 +17,20 @@ final class SetupStatusTests: XCTestCase {
         XCTAssertFalse(SetupStatus.shouldShow(
             accessibilityGranted: false, dismissed: false, isScreenshot: true))
     }
+
+    // A session actually blocked on the missing permission re-raises the card
+    // even after the user dismissed it (the permanent-dismissal hole). "I can't
+    // act" must not be dismissable into silence.
+    func testBlockedSessionReRaisesThroughDismissal() {
+        XCTAssertTrue(SetupStatus.shouldShow(
+            accessibilityGranted: false, dismissed: true, isScreenshot: false, hasBlockedSessions: true))
+        // Dismissed and nothing blocked: stay hidden, respect the dismissal.
+        XCTAssertFalse(SetupStatus.shouldShow(
+            accessibilityGranted: false, dismissed: true, isScreenshot: false, hasBlockedSessions: false))
+        // Granted or screenshot still win over a block.
+        XCTAssertFalse(SetupStatus.shouldShow(
+            accessibilityGranted: true, dismissed: false, isScreenshot: false, hasBlockedSessions: true))
+        XCTAssertFalse(SetupStatus.shouldShow(
+            accessibilityGranted: false, dismissed: false, isScreenshot: true, hasBlockedSessions: true))
+    }
 }

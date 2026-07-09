@@ -43,7 +43,7 @@ extension View {
 struct MenuView: View {
     @EnvironmentObject var state: AppState
     @State private var showSettings: Bool
-    @State private var showActivity = false
+    @State private var showActivity: Bool
     @AppStorage("setupDismissed") private var setupDismissed = false
     // AXIsProcessTrusted() is only re-read on render, so poll while the card is
     // showing — the checkmark should flip within seconds of granting, matching
@@ -52,8 +52,9 @@ struct MenuView: View {
     private let setupPermissionTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
     private let maxStalledRows = 6 // render this many; the rest auto-resume
 
-    init(showSettings: Bool = false) {
+    init(showSettings: Bool = false, showActivity: Bool = false) {
         _showSettings = State(initialValue: showSettings)
+        _showActivity = State(initialValue: showActivity)
     }
 
     var body: some View {
@@ -148,56 +149,84 @@ struct MenuView: View {
     /// granted or the user dismisses it.
     @ViewBuilder
     private var setupCard: some View {
-        // Claude Desktop (Cowork) resume is Accessibility-only, no fallback, so a
-        // stalled Cowork session with Accessibility off is fully blocked, and the
-        // card must re-raise even if the user dismissed it. Conductor sessions
-        // fall back to headless, so they are not blocked, just invisible in chat.
-        let blockedCount = state.stalled.filter { $0.source == .claudeDesktop }.count
-        let blocked = !hasAccessibility && blockedCount > 0
-        if SetupStatus.shouldShow(
-            accessibilityGranted: hasAccessibility, dismissed: setupDismissed,
-            isScreenshot: state.isScreenshot, hasBlockedSessions: blocked
-        ) {
-            VStack(alignment: .leading, spacing: Design.m) {
-                HStack {
-                    Text(blocked ? "Action needed" : "Finish setup")
-                        .font(.subheadline.weight(.semibold))
-                    Spacer()
-                    if !blocked {  // can't dismiss into silence while a session is blocked
-                        Button { withAnimation { setupDismissed = true } } label: {
-                            Image(systemName: "xmark").font(.caption2)
-                        }
-                        .buttonStyle(.plain).foregroundStyle(.secondary).help("Dismiss")
-                    }
-                }
-                if blocked {
-                    Text("\(blockedCount) Claude app session\(blockedCount == 1 ? "" : "s") stalled that I can't resume without Accessibility.")
-                        .font(.caption).foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                setupStep(done: state.armed, "Night watch armed")
-                setupStep(done: LoginItem.isEnabled, "Launches at login")
-                setupStep(done: state.usage != nil, "Reading your Claude usage")
-                setupStep(done: hasAccessibility, "Accessibility, so resumes show inside the app")
-                if !blocked {
-                    Text("Without it, resumes still run, just in the background instead of in the app's chat.")
-                        .font(.caption2).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Button("Open Accessibility Settings…") {
-                    UIResumer.openAccessibilitySettings()
-                }
-                .controlSize(.small)
+        // Demo hook: the offscreen design render forces the card (it is hidden in
+        // real screenshot/doc mode) so both states can be seen and tuned.
+        if let demo = state.screenshotSetup {
+            setupCardBody(blocked: demo == "blocked", blockedCount: 2, armed: true,
+                          launchAtLogin: true, usageReady: true, accessibility: false,
+                          onDismiss: demo == "blocked" ? nil : {})
+        } else {
+            // Claude Desktop (Cowork) resume is Accessibility-only, no fallback, so
+            // a stalled Cowork session with Accessibility off is fully blocked, and
+            // the card re-raises even if dismissed. Conductor sessions fall back to
+            // headless, so they are not blocked, just invisible in chat.
+            let blockedCount = state.stalled.filter { $0.source == .claudeDesktop }.count
+            let blocked = !hasAccessibility && blockedCount > 0
+            if SetupStatus.shouldShow(
+                accessibilityGranted: hasAccessibility, dismissed: setupDismissed,
+                isScreenshot: state.isScreenshot, hasBlockedSessions: blocked
+            ) {
+                setupCardBody(
+                    blocked: blocked, blockedCount: blockedCount, armed: state.armed,
+                    launchAtLogin: LoginItem.isEnabled, usageReady: state.usage != nil,
+                    accessibility: hasAccessibility,
+                    onDismiss: blocked ? nil : { withAnimation { setupDismissed = true } }
+                )
             }
-            .glassCard()
         }
     }
 
-    private func setupStep(done: Bool, _ label: String) -> some View {
+    /// The card body, values passed explicitly so the offscreen render can show
+    /// both the calm "Finish setup" and the urgent amber "Action needed" states.
+    /// The one manual step (Accessibility) is highlighted as pending so the eye
+    /// lands on the single thing left to do.
+    private func setupCardBody(
+        blocked: Bool, blockedCount: Int, armed: Bool, launchAtLogin: Bool,
+        usageReady: Bool, accessibility: Bool, onDismiss: (() -> Void)?
+    ) -> some View {
+        let accent: Color = blocked ? .orange : .indigo
+        return VStack(alignment: .leading, spacing: Design.m) {
+            HStack(spacing: Design.s) {
+                Image(systemName: blocked ? "exclamationmark.triangle.fill" : "sparkles")
+                    .font(.caption).foregroundStyle(accent)
+                Text(blocked ? "Action needed" : "Finish setup")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                if let onDismiss {  // no dismiss while a session is actually blocked
+                    Button(action: onDismiss) { Image(systemName: "xmark").font(.caption2) }
+                        .buttonStyle(.plain).foregroundStyle(.secondary).help("Dismiss")
+                }
+            }
+            if blocked {
+                Text("\(blockedCount) Claude app session\(blockedCount == 1 ? "" : "s") stalled that I can't resume without Accessibility.")
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            VStack(alignment: .leading, spacing: Design.s) {
+                setupStep(done: armed, "Night watch armed")
+                setupStep(done: launchAtLogin, "Launches at login")
+                setupStep(done: usageReady, "Reading your Claude usage")
+                setupStep(done: accessibility, pending: !accessibility,
+                          "Accessibility, so resumes show inside the app")
+            }
+            if !blocked {
+                Text("Without it, resumes still run, just in the background instead of in the app's chat.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Button("Open Accessibility Settings…") { UIResumer.openAccessibilitySettings() }
+                .controlSize(.small)
+                .tint(accent)
+        }
+        .glassCard(tint: blocked ? .orange : nil)
+    }
+
+    private func setupStep(done: Bool, pending: Bool = false, _ label: String) -> some View {
         HStack(spacing: Design.s) {
-            Image(systemName: done ? "checkmark.circle.fill" : "circle")
+            Image(systemName: done ? "checkmark.circle.fill"
+                                   : (pending ? "circle.dashed" : "circle"))
                 .font(.caption)
-                .foregroundStyle(done ? Color.green : Color.secondary)
+                .foregroundStyle(done ? Color.green : (pending ? Color.orange : Color.secondary))
             Text(label)
                 .font(.caption)
                 .foregroundStyle(done ? Color.secondary : Color.primary)

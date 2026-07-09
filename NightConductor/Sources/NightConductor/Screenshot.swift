@@ -17,7 +17,7 @@ enum Screenshotter {
 
         NightSkyView.hourOverride = hour // docs default to night (23)
         let state = demoState(stateName)
-        let root = MenuView(showSettings: showSettings)
+        let root = MenuView(showSettings: showSettings, showActivity: stateName == "activity")
             .environmentObject(state)
             .frame(width: 340)
             .fixedSize(horizontal: false, vertical: true)
@@ -112,6 +112,7 @@ enum Screenshotter {
         UserDefaults.standard.set(armed, forKey: "armed")
 
         let state = AppState(forScreenshots: true)
+        state.screenshotSetup = name == "blocked" ? "blocked" : (name == "setup" ? "finish" : nil)
         let now = Date()
         state.usage = UsageSnapshot(
             fiveHour: UsageWindow(utilization: fiveHour, resetsAt: now.addingTimeInterval(3.2 * 3600)),

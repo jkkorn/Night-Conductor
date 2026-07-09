@@ -39,6 +39,19 @@ final class ResumeHistoryTests: XCTestCase {
         XCTAssertTrue(ResumeHistory.recent(defaults: makeDefaults()).isEmpty)
     }
 
+    // The morning summary uses backgroundCount to decide whether to send the
+    // user to their diffs. Only headless (inConductor == false) resumes inside
+    // the window count.
+    func testBackgroundCountCountsRecentHeadlessOnly() {
+        let d = makeDefaults()
+        let base = Date()
+        ResumeHistory.record(event("bg", 60, from: base, inConductor: false), defaults: d)
+        ResumeHistory.record(event("in-app", 60, from: base, inConductor: true), defaults: d)
+        ResumeHistory.record(event("old-bg", 100_000, from: base, inConductor: false), defaults: d)
+        XCTAssertEqual(ResumeHistory.backgroundCount(within: 3600, now: base, defaults: d), 1)
+        XCTAssertEqual(ResumeHistory.backgroundCount(within: 200_000, now: base, defaults: d), 2)
+    }
+
     private func makeDefaults() -> UserDefaults {
         let suite = "ResumeHistoryTests-\(UUID().uuidString)"
         let d = UserDefaults(suiteName: suite)!

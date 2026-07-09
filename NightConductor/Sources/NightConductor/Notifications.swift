@@ -13,13 +13,20 @@ enum Notifications {
         }
     }
 
-    static func postMorningSummary(count: Int, sampleTitle: String?) {
+    static func postMorningSummary(count: Int, sampleTitle: String?, backgroundCount: Int = 0) {
         guard count > 0 else { return }
         let content = UNMutableNotificationContent()
         content.title = "🌙 Good morning"
-        content.body = count == 1
+        let lead = count == 1
             ? "Resumed 1 session while you slept\(sampleTitle.map { ": \($0)" } ?? ".")"
-            : "Resumed \(count) sessions while you slept. Check your workspaces."
+            : "Resumed \(count) sessions while you slept."
+        // A headless (background) resume lands work in your workspace but never
+        // updates the host app's chat, so point the user at their diffs. This is
+        // the exact mismatch that makes a working night look like a broken one.
+        let whereToLook = backgroundCount > 0
+            ? " Check your workspace diffs, not the chat. Some ran in the background."
+            : (count == 1 ? "" : " Check your workspaces.")
+        content.body = lead + whereToLook
         content.sound = .default
         let request = UNNotificationRequest(
             identifier: "night-conductor.morning",

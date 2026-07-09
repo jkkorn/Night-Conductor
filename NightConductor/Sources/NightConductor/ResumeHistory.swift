@@ -47,4 +47,14 @@ enum ResumeHistory {
     static func weekCount(now: Date = Date(), defaults: UserDefaults = .standard) -> Int {
         count(within: 7 * 86_400, now: now, defaults: defaults)
     }
+
+    /// How many recent resumes ran in the BACKGROUND (headless, not inside the
+    /// host app). The morning summary uses this to send the user to their
+    /// workspace diffs instead of the host's chat, which a headless resume never
+    /// updates. That mismatch is what makes a working night look like a broken one.
+    static func backgroundCount(within interval: TimeInterval, now: Date = Date(),
+                                defaults: UserDefaults = .standard) -> Int {
+        let cutoff = now.addingTimeInterval(-interval)
+        return load(defaults: defaults).filter { $0.date >= cutoff && !$0.inConductor }.count
+    }
 }

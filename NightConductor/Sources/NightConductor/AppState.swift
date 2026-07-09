@@ -47,6 +47,7 @@ final class AppState: ObservableObject {
     // session and bypass the per-night caps).
     private var isResuming = false
     let isScreenshot: Bool  // true → inert demo state; never hit the live API
+    var screenshotSetup: String?  // demo-only: force the setup card in the design render
 
     init(forScreenshots: Bool = false) {
         isScreenshot = forScreenshots

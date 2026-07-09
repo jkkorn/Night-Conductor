@@ -2,6 +2,15 @@
 
 All notable changes to Night Conductor. Dates are when the release was cut.
 
+## 1.0.11
+
+### Changed
+- A design pass on the setup card. The first-run "Finish setup" and the urgent
+  "Action needed" states now lead with a clear icon, highlight the one manual
+  step left to do (a dashed amber marker on it), and wash the whole card amber
+  when a session is actually blocked, so the thing that needs you stands out
+  without shouting.
+
 ## 1.0.10
 
 ### Added

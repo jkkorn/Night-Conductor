@@ -2,6 +2,14 @@
 
 All notable changes to Night Conductor. Dates are when the release was cut.
 
+## 1.0.12
+
+### Fixed
+- Arming and disarming the watch is snappy again. The toggle used to animate the
+  whole header (the mesh-gradient sky and the moon's shadow blur) for a third of
+  a second on every flip, which felt sluggish. The moon's glow now varies by
+  opacity instead of animating the expensive blur radius.
+
 ## 1.0.11
 
 ### Changed

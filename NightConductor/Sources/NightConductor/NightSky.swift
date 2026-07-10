@@ -156,8 +156,12 @@ struct GlowingMoon: View {
         Image(systemName: "moon.stars.fill")
             .font(.system(size: size))
             .foregroundStyle(.white.opacity(armed ? 0.9 : 0.5))
-            .shadow(color: .white.opacity(armed ? 0.5 : 0.15), radius: armed ? 10 : 4)
-            .shadow(color: Color(red: 0.5, green: 0.5, blue: 0.95).opacity(armed ? 0.6 : 0.2),
-                    radius: armed ? 18 : 6)
+            // Fixed blur radii on purpose: animating a shadow's RADIUS re-rasterizes
+            // the blur every frame, which is what made arming/disarming sluggish.
+            // Vary only opacity (cheap), so the glow still brightens when armed.
+            .shadow(color: .white.opacity(armed ? 0.5 : 0.12), radius: 9)
+            .shadow(color: Color(red: 0.5, green: 0.5, blue: 0.95).opacity(armed ? 0.6 : 0.18),
+                    radius: 16)
+            .animation(.easeInOut(duration: 0.3), value: armed)
     }
 }

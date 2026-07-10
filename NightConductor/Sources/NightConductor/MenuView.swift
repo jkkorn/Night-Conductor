@@ -115,11 +115,11 @@ struct MenuView: View {
                 VStack(alignment: .trailing, spacing: Design.xs) {
                     Toggle("Arm night watch", isOn: Binding(
                         get: { state.armed },
-                        set: { newValue in
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) {
-                                state.armed = newValue
-                            }
-                        }
+                        // Set directly, no wrapping spring: the old spring animated the
+                        // whole armed-driven header (mesh sky + moon shadows) for 0.35s
+                        // of full re-renders, which made the toggle feel sluggish. The
+                        // sub-views animate their own armed change cheaply.
+                        set: { state.armed = $0 }
                     ))
                     .labelsHidden()
                     .toggleStyle(.switch)

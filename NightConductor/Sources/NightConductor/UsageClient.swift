@@ -116,7 +116,27 @@ enum UsageClient {
         return UsageSnapshot(
             fiveHour: parseWindow(object["five_hour"]),
             sevenDay: parseWindow(object["seven_day"]),
+            scopedWeekly: parseScopedWeekly(object["limits"]),
             fetchedAt: now
         )
+    }
+
+    /// The usage API reports a per-model weekly cap (e.g. Fable's own allowance)
+    /// as a `weekly_scoped` entry in the `limits` array, the model under
+    /// `scope.model.display_name`. Return the first one with a model; nil if none.
+    static func parseScopedWeekly(_ raw: Any?) -> ScopedWeekly? {
+        guard let limits = raw as? [[String: Any]] else { return nil }
+        for limit in limits {
+            guard (limit["kind"] as? String) == "weekly_scoped",
+                  let scope = limit["scope"] as? [String: Any],
+                  let model = scope["model"] as? [String: Any],
+                  let name = model["display_name"] as? String, !name.isEmpty
+            else { continue }
+            let pct = (limit["percent"] as? NSNumber)?.doubleValue ?? 0
+            let resets = (limit["resets_at"] as? String).flatMap(ISO.parse)
+            return ScopedWeekly(modelName: name,
+                                window: UsageWindow(utilization: pct, resetsAt: resets))
+        }
+        return nil
     }
 }

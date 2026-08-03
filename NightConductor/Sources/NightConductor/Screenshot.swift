@@ -117,6 +117,10 @@ enum Screenshotter {
         state.usage = UsageSnapshot(
             fiveHour: UsageWindow(utilization: fiveHour, resetsAt: now.addingTimeInterval(3.2 * 3600)),
             sevenDay: UsageWindow(utilization: weekly, resetsAt: now.addingTimeInterval(1.6 * 86_400)),
+            scopedWeekly: ScopedWeekly(
+                modelName: "Fable",
+                window: UsageWindow(utilization: 41, resetsAt: now.addingTimeInterval(3.4 * 86_400))
+            ),
             fetchedAt: now
         )
         state.decision = name == "high"

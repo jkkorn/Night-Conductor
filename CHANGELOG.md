@@ -2,6 +2,17 @@
 
 All notable changes to Night Conductor. Dates are when the release was cut.
 
+## 1.0.13
+
+### Added
+- A weekly allowance bar for a per-model cap. If your plan scopes a model
+  separately (Fable has its own weekly allowance), the popover shows a third
+  meter for it beside the 5-hour and weekly budgets, read live from the usage API.
+
+### Changed
+- The night sky respects Reduce Motion. With that accessibility setting on, the
+  drifting mesh and twinkling stars settle to a calm static frame.
+
 ## 1.0.12
 
 ### Fixed

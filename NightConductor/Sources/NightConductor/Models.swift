@@ -8,7 +8,17 @@ struct UsageWindow: Equatable {
 struct UsageSnapshot: Equatable {
     let fiveHour: UsageWindow
     let sevenDay: UsageWindow
+    /// A per-model weekly cap the plan scopes separately (e.g. Fable's own
+    /// weekly allowance), from the usage API's `limits` array. nil when the
+    /// plan has no scoped weekly limit.
+    var scopedWeekly: ScopedWeekly? = nil
     let fetchedAt: Date
+}
+
+/// A weekly usage cap scoped to one model, like Fable's own allowance.
+struct ScopedWeekly: Equatable {
+    let modelName: String        // e.g. "Fable"
+    let window: UsageWindow
 }
 
 /// Why a session stalled — both arrive as HTTP 429 but mean different things.

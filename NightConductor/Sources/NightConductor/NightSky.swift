@@ -8,6 +8,10 @@ import SwiftUI
 struct NightSkyView: View {
     var armed: Bool
     var animated: Bool = true
+    // Respect Reduce Motion: a sky that drifts and twinkles nonstop is exactly
+    // the ambient motion that setting exists to quiet. Falls to a static frame.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private var live: Bool { animated && !reduceMotion }
 
     /// Screenshots force a flattering night hour; the live app uses the clock.
     static var hourOverride: Double?
@@ -24,7 +28,7 @@ struct NightSkyView: View {
     ]
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !animated)) { timeline in
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !live)) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
             let hour = Self.hourOverride ?? Self.hour(from: timeline.date)
             let sky = SkyPalette.at(hour: hour)
@@ -43,7 +47,7 @@ struct NightSkyView: View {
     // MARK: - Aurora (animated mesh, time-of-day palette)
 
     private func aurora(t: TimeInterval, sky: SkyPalette) -> some View {
-        let d = animated ? 0.018 : 0.0
+        let d = live ? 0.018 : 0.0
         func wob(_ a: Double, _ b: Double) -> Float { Float(sin(t * a + b) * d) }
         let pts: [SIMD2<Float>] = [
             [0, 0], [0.5 + wob(0.23, 1.0), 0], [1, 0],
@@ -70,7 +74,7 @@ struct NightSkyView: View {
         Canvas { ctx, size in
             guard starLevel > 0.01 else { return } // no stars in daylight
             for star in Self.stars {
-                let twinkle = animated ? (0.55 + 0.45 * sin(t * 1.1 + star.phase)) : 0.8
+                let twinkle = live ? (0.55 + 0.45 * sin(t * 1.1 + star.phase)) : 0.8
                 let brightness = starLevel * (armed ? 1.0 : 0.55) * twinkle
                 let p = CGPoint(x: star.x * size.width, y: star.y * size.height)
                 let rect = CGRect(x: p.x - star.r, y: p.y - star.r,

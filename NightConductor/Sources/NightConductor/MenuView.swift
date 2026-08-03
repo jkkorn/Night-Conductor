@@ -252,6 +252,15 @@ struct MenuView: View {
                 window: state.usage?.sevenDay,
                 resetStyle: .date
             )
+            // A per-model weekly cap the plan scopes separately (e.g. Fable's
+            // own weekly allowance), shown only when the plan has one.
+            if let scoped = state.usage?.scopedWeekly {
+                UsageMeter(
+                    label: "\(scoped.modelName) weekly",
+                    window: scoped.window,
+                    resetStyle: .date
+                )
+            }
         }
     }
 

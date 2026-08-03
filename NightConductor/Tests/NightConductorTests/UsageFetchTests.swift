@@ -80,4 +80,26 @@ final class UsageFetchTests: XCTestCase {
             force: true, hasUsage: false, fresh: false, inBackoff: true,
             age: 1000, threshold: 180, attemptAge: 100, minAttemptGap: 20))
     }
+
+    // The usage API exposes a per-model weekly cap (e.g. Fable's own allowance)
+    // as a weekly_scoped entry in the `limits` array. Pull the model + percent.
+    func testParseScopedWeeklyFindsFable() {
+        let limits: [[String: Any]] = [
+            ["kind": "session", "percent": 20],
+            ["kind": "weekly_all", "percent": 33],
+            ["kind": "weekly_scoped", "percent": 34,
+             "resets_at": "2026-08-07T05:00:00Z",
+             "scope": ["model": ["display_name": "Fable"]]],
+        ]
+        let scoped = UsageClient.parseScopedWeekly(limits)
+        XCTAssertEqual(scoped?.modelName, "Fable")
+        XCTAssertEqual(scoped?.window.utilization, 34)
+        XCTAssertNotNil(scoped?.window.resetsAt)
+    }
+
+    func testParseScopedWeeklyNilWhenNoModelScope() {
+        XCTAssertNil(UsageClient.parseScopedWeekly([["kind": "weekly_all", "percent": 33]]))
+        XCTAssertNil(UsageClient.parseScopedWeekly(nil))
+        XCTAssertNil(UsageClient.parseScopedWeekly("not an array"))
+    }
 }

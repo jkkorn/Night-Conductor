@@ -6,12 +6,18 @@ struct UsageWindow: Equatable {
 }
 
 struct UsageSnapshot: Equatable {
-    let fiveHour: UsageWindow
+    /// The short rolling window. Claude dropped it (the API now sends
+    /// `five_hour: null`), so nil means "weekly-only plan", never "0% used".
+    let fiveHour: UsageWindow?
     let sevenDay: UsageWindow
     /// A per-model weekly cap the plan scopes separately (e.g. Fable's own
     /// weekly allowance), from the usage API's `limits` array. nil when the
     /// plan has no scoped weekly limit.
     var scopedWeekly: ScopedWeekly? = nil
+    /// When the current weekly window opened, if the API says so.
+    var weeklyStartedAt: Date? = nil
+    /// Plan name as Claude shows it ("Max 20x"), from the local credential.
+    var plan: String? = nil
     let fetchedAt: Date
 }
 

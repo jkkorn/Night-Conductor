@@ -48,6 +48,7 @@ struct UsageRing: View {
     var armed: Bool = true
     var diameter: CGFloat = 13
     var lineWidth: CGFloat = 2.6
+    var tint: Color? = nil   // overrides the usage ramp (e.g. a warning color)
 
     var body: some View {
         ZStack {
@@ -55,7 +56,7 @@ struct UsageRing: View {
             Circle()
                 .trim(from: 0, to: min(max(value, 0), 100) / 100)
                 .stroke(
-                    Color.usageStatus(value),
+                    tint ?? Color.usageStatus(value),
                     style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
                 )
                 .rotationEffect(.degrees(-90))

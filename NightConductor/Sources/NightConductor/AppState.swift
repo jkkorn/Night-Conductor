@@ -17,6 +17,14 @@ final class AppState: ObservableObject {
     @Published var currentlyResuming: String?
     @Published var lastTick: Date?
     @Published var update: UpdateChecker.Release?   // set when a newer release exists
+    // Every AI subscription we can read (Claude, ChatGPT via Codex, Grok Bot),
+    // plus the forecast for each. Maintained in AppState+Budgets.swift.
+    @Published var providers: [ProviderUsage] = []
+    @Published var assessments: [ProviderID: BurnAssessment] = [:]
+    @Published var otherAITools: [String] = []
+    var lastLocalProviderRead: Date?
+    var cachedLocalProviders: [ProviderUsage] = []
+    lazy var sampleLog: UsageSampleLog = isScreenshot ? UsageSampleLog() : UsageSampleLog.load()
 
     static let scanInterval: TimeInterval = 30        // local DB scan — cheap
     static let resumeInterval: TimeInterval = 600     // how often resumes are attempted
@@ -169,6 +177,7 @@ final class AppState: ObservableObject {
         UserDefaults.standard.set(Date(), forKey: "lastHeartbeat") // liveness proof
         checkMorningSummary(inWindow: inWindow, config: config)
         stalled = await combinedStalled()
+        await refreshBudgets()
         lastTick = Date()
         return recomputeDecision(config: config)
     }
@@ -229,6 +238,7 @@ final class AppState: ObservableObject {
             }
         }
         _ = recomputeDecision(config: PolicyConfig.fromDefaults())
+        await refreshBudgets() // the Claude meter tracks the fresh reading at once
         return usageIsFresh(now)
     }
 
@@ -580,7 +590,7 @@ final class AppState: ObservableObject {
         return (mark: true, post: total > 0)
     }
 
-    private func log(_ message: String) {
+    func log(_ message: String) {
         let stamp = Date().formatted(date: .omitted, time: .shortened)
         activity.insert("\(stamp)  \(message)", at: 0)
         if activity.count > 50 { activity.removeLast(activity.count - 50) }

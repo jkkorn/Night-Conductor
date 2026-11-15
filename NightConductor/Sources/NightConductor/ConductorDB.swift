@@ -121,6 +121,10 @@ enum ConductorDB {
         guard FileManager.default.fileExists(atPath: workspacePath, isDirectory: &isDirectory),
               isDirectory.boolValue
         else { return nil } // workspace was removed; nothing to resume into
+        // Untrusted row: only a UUID session in a real project folder.
+        guard ResumeSafety.isValidSessionID(claudeSessionID),
+              ResumeSafety.isSafeWorkspace(workspacePath)
+        else { return nil }
 
         // Fail closed: an unparseable timestamp must not bypass the
         // staleness guard and let an arbitrarily old session be resumed.

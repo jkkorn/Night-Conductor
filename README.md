@@ -6,7 +6,8 @@
 
 <p align="center">
   <strong>Your <a href="https://conductor.build">Conductor</a> sessions hit the Claude usage limit at 11pm.<br>
-  Night Conductor finishes them while you sleep, without blowing your weekly budget.</strong>
+  Night Conductor finishes them while you sleep, without blowing your weekly budget.<br>
+  It also shows your weekly Claude, ChatGPT and Grok usage, and warns you before you run out.</strong>
 </p>
 
 <p align="center">
@@ -57,16 +58,16 @@ Every few minutes inside your watch window (23:00 to 07:00 by default):
 1. **It scans.** Reads the session database (read only, it never writes back)
    for anything whose last message is a `429` usage-limit error.
 2. **It checks the budget.** Asks the official usage endpoint for your live
-   5-hour and weekly numbers, the same ones `/usage` shows in Claude Code,
-   using the OAuth token Claude Code already keeps in your Keychain.
+   weekly numbers, the same ones `/usage` shows in Claude Code, using the
+   OAuth token Claude Code already keeps in your Keychain.
 3. **It decides.** It only resumes when there's real room:
-   - your 5-hour window is under the ceiling (85% by default)
-   - your weekly window is under the stop line (90% by default)
+   - this week is under your stop line (90% used by default)
    - you aren't burning the week faster than it's passing. If you're at 70%
      with five days left, it holds rather than make that worse overnight.
-   - it leaves your mornings alone. You tell it when you're back (7:00 by
-     default), and it won't start a session in the five hours before that, so a
-     6am resume can't lock you out of your own window until 11am.
+   - on a plan that still has a 5-hour window, it also keeps that under its
+     ceiling and leaves your mornings alone, so a 6am resume can't lock you
+     out until 11am. Claude and ChatGPT plans are weekly-only now, so this
+     usually doesn't apply.
 4. **It resumes.** It presses Retry so the work continues right in the chat.
    Resumes are spread across the night with a re-check after each one. It stops
    at 3 retries per session and 10 resumes a night. If it can't read your
@@ -119,12 +120,23 @@ schedule a firmware wake at your start hour.
   <img src="docs/settings.png" width="330" alt="Settings: watch hours, morning protection, budget ceilings">
 </p>
 
-- **Menu bar.** A moon next to your live 5-hour usage, so you can see how much
-  room you have without opening anything.
-- **Two meters.** Your 5-hour and weekly windows, with reset times.
-- **The decision line.** Plain language about what it's doing and why. By day
-  it reads "You're at the helm, night watch starts at 23:00." When it's clear
-  to go, "Wiggle room: 29% of week used, 1.6 days to reset."
+- **Menu bar.** A ring with your Claude usage for the week. If another account
+  needs attention (running out early, burning fast), it shows that one instead,
+  with its icon.
+- **Your usage.** Claude, ChatGPT (read from Codex's own logs) and Grok (read
+  from Grok Bot's cached reading), one line each with "% used" and the reset
+  time, and a one-line summary on top: "All three on track." Anything that
+  needs attention opens up with a plain sentence, like "At this pace you'll use
+  it all by Wednesday at 15:00, about 2 days before it resets." Readings older
+  than a day are labelled as old instead of forecast from. Other AI tools are
+  read only from files on your Mac: nothing extra is sent anywhere.
+- **Alerts.** A notification when you're burning faster than usual (choose
+  Sensitive, Balanced or Relaxed) and when you're on track to run out before a
+  reset. Each one is said once, then stays quiet.
+- **The decision line.** Plain language about what the night watch is doing and
+  why. By day it reads "Night watch starts at 23:00. It resumes stalled sessions
+  while you sleep." When it's clear to go, "Room to spare: 29% used this week,
+  1.6 days to reset."
 - **Stalled sessions.** Everything waiting at the limit, with a Resume now
   button that skips the schedule but still respects the budget.
 - **Activity log.** What got done last night.

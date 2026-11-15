@@ -18,7 +18,7 @@ enum ClaudeCodeDB {
     private static let maxPerDir = 5         // recent transcripts to scan per dir for a stall
 
     static func findStalledSessions(
-        root: String = projectsRoot, now: Date = Date()
+        root: String = projectsRoot, now: Date = Date(), home: String = NSHomeDirectory()
     ) -> [StalledSession] {
         let fm = FileManager.default
         guard let walker = fm.enumerator(
@@ -57,7 +57,7 @@ enum ClaudeCodeDB {
         var seenWorkspaces = Set<String>()
         for dir in dirOrder.prefix(maxDirsScanned) {
             for url in (byDir[dir] ?? []).prefix(maxPerDir) {
-                guard let session = parse(url: url, now: now) else { continue }
+                guard let session = parse(url: url, now: now, home: home) else { continue }
                 if seenWorkspaces.insert(session.workspacePath).inserted {
                     out.append(session)
                 }
@@ -75,7 +75,7 @@ enum ClaudeCodeDB {
             || cwd.contains("/Library/Application Support/Claude/local-agent-mode-sessions")
     }
 
-    private static func parse(url: URL, now: Date) -> StalledSession? {
+    private static func parse(url: URL, now: Date, home: String) -> StalledSession? {
         let lines = tail(url, maxBytes: tailBytes)
         var cwd: String?
         var lastAssistant: (isError: Bool, status: Int, text: String, ts: Date)?
@@ -106,7 +106,15 @@ enum ClaudeCodeDB {
         guard FileManager.default.fileExists(atPath: workingDir, isDirectory: &isDir),
               isDir.boolValue else { return nil }
 
+        // Untrusted file (security audit H1/H2): the filename must be a UUID,
+        // the cwd it claims must be the folder Claude Code filed it under, and
+        // that folder must be a project, never $HOME or a dot-directory.
         let uuid = url.deletingPathExtension().lastPathComponent
+        let projectDir = url.deletingLastPathComponent().lastPathComponent
+        guard ResumeSafety.isValidSessionID(uuid),
+              cwd.map({ ResumeSafety.cwdMatchesProjectDir($0, projectDir: projectDir) }) ?? true,
+              ResumeSafety.isSafeWorkspace(workingDir, home: home)
+        else { return nil }
         return StalledSession(
             sessionID: "cc-\(uuid)",
             claudeSessionID: uuid,

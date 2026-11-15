@@ -67,10 +67,16 @@ enum Resumer {
         claudePath: String,
         config: PolicyConfig
     ) -> ResumeResult {
+        // Security audit H1/H2: the id and the directory come from other apps'
+        // files. Refuse anything that isn't a UUID or a project folder.
+        guard ResumeSafety.allowsHeadlessResume(session) else {
+            return ResumeResult(ok: false, detail: "refused: session id or workspace failed safety checks")
+        }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: claudePath)
         process.arguments = [
-            "--resume", session.claudeSessionID,
+            "--resume", session.claudeSessionID, // a validated UUID, so never read as a flag
+
             "-p", config.resumePrompt,
             "--permission-mode", config.permissionMode,
         ]

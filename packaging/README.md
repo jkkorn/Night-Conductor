@@ -2,7 +2,7 @@
 
 Signing only affects the **binaries you ship**; the source stays MIT and
 contributors keep building ad-hoc from source for free. Your account:
-Apple ID `<your-apple-id>`, Team ID `<TEAMID>`.
+Your Apple ID and Team ID (find the Team ID at developer.apple.com → Membership).
 
 The whole setup is about ten minutes, once. After that, every release is a
 single `./release.sh`.
@@ -33,7 +33,7 @@ next step cannot be created until the membership is active again.
 You currently have only an *Apple Development* cert, which can't sign apps for
 distribution outside the App Store. Create the Developer ID one:
 
-- **Xcode** → Settings → Accounts → select `<your-apple-id>` → **Manage
+- **Xcode** → Settings → Accounts → select your Apple ID → **Manage
   Certificates…** → **+** → **Developer ID Application**.
 
 Confirm it landed:

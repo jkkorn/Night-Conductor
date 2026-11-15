@@ -65,6 +65,22 @@ final class PolicyTests: XCTestCase {
         XCTAssertTrue(decision.reason.contains("5-hour"))
     }
 
+    // Claude and ChatGPT dropped the 5-hour window (the usage API now returns
+    // `five_hour: null`). With no short window there's nothing to keep fresh
+    // for the morning, and no 5h ceiling to check: only the weekly gates apply.
+    func testNoFiveHourWindowSkipsShortWindowGates() {
+        let fiveAM = date(hour: 5)
+        let weeklyOnly = UsageSnapshot(
+            fiveHour: nil,
+            sevenDay: UsageWindow(utilization: 10, resetsAt: fiveAM.addingTimeInterval(3 * 86_400)),
+            fetchedAt: fiveAM
+        )
+        let decision = Policy.shouldResume(usage: weeklyOnly, config: PolicyConfig(),
+                                           now: fiveAM, calendar: utc)
+        XCTAssertTrue(decision.resume, decision.reason)
+        XCTAssertFalse(decision.reason.contains("5-hour"))
+    }
+
     func testMorningProtectionHoldsWithinFiveHoursOfWake() {
         let fiveAM = date(hour: 5) // wake at 7 -> window would be hot until 10
         let decision = Policy.shouldResume(

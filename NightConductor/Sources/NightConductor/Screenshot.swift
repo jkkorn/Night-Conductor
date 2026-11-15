@@ -16,6 +16,11 @@ enum Screenshotter {
         app.finishLaunching()
 
         NightSkyView.hourOverride = hour // docs default to night (23)
+        // demoState writes the real `armed` pref (the views read it through
+        // @AppStorage). Put the user's own value back when we're done, so a
+        // render can never silently disarm the watch (security audit L5).
+        let previousArmed = UserDefaults.standard.object(forKey: "armed")
+        defer { UserDefaults.standard.set(previousArmed, forKey: "armed") }
         let state = demoState(stateName)
         let root = MenuView(showSettings: showSettings, showActivity: stateName == "activity")
             .environmentObject(state)
@@ -107,7 +112,6 @@ enum Screenshotter {
     private static func demoState(_ name: String = "default") -> AppState {
         // Per-state knobs so we can audit every visual state as a still.
         let armed = name != "paused"
-        let fiveHour = name == "high" ? 88.0 : 36.0
         let weekly = name == "high" ? 76.0 : 29.0
         UserDefaults.standard.set(armed, forKey: "armed")
 
@@ -115,17 +119,36 @@ enum Screenshotter {
         state.screenshotSetup = name == "blocked" ? "blocked" : (name == "setup" ? "finish" : nil)
         let now = Date()
         state.usage = UsageSnapshot(
-            fiveHour: UsageWindow(utilization: fiveHour, resetsAt: now.addingTimeInterval(3.2 * 3600)),
+            fiveHour: nil, // Claude is weekly-only now
             sevenDay: UsageWindow(utilization: weekly, resetsAt: now.addingTimeInterval(1.6 * 86_400)),
             scopedWeekly: ScopedWeekly(
                 modelName: "Fable",
                 window: UsageWindow(utilization: 41, resetsAt: now.addingTimeInterval(3.4 * 86_400))
             ),
+            plan: "Max 20x",
             fetchedAt: now
         )
+        let claude = ProviderUsage.claude(from: state.usage!)
+        let chatgpt = ProviderUsage(provider: .chatgpt, source: "Codex", plan: "Pro",
+                                    weekly: UsageWindow(utilization: name == "high" ? 71 : 26,
+                                                        resetsAt: now.addingTimeInterval(5.1 * 86_400)),
+                                    readAt: now.addingTimeInterval(-120))
+        let grok = ProviderUsage(provider: .grok, source: "Grok Bot", plan: "Grok Bot Plan",
+                                 weekly: UsageWindow(utilization: 52, resetsAt: now.addingTimeInterval(1.8 * 86_400)),
+                                 readAt: now.addingTimeInterval(-2 * 86_400))
+        state.providers = [claude, chatgpt, grok]
+        state.assessments = [
+            .claude: BurnAssessment(evenPacePercent: 77, runsOutAt: nil, recentRate: name == "high" ? 9 : 2, usualRate: 3,
+                                    isBurningHot: name == "high"),
+            .chatgpt: BurnAssessment(evenPacePercent: 27,
+                                     runsOutAt: name == "high" ? now.addingTimeInterval(2.2 * 86_400) : nil,
+                                     recentRate: 1, usualRate: 2, isBurningHot: false),
+            .grok: BurnAssessment(evenPacePercent: 74, runsOutAt: nil, recentRate: nil, usualRate: nil,
+                                  isBurningHot: false),
+        ]
         state.decision = name == "high"
-            ? Decision(resume: false, reason: "5-hour window at 88% (ceiling 85%)", state: .holding)
-            : Decision(resume: true, reason: "Wiggle room: 29% of week used, 1.6 days to reset", state: .resuming)
+            ? Decision(resume: false, reason: "Using the week too fast: 76% used, 1.6 days to reset", state: .holding)
+            : Decision(resume: true, reason: "Room to spare: 29% used this week, 1.6 days to reset", state: .resuming)
         let base = [
             StalledSession(
                 sessionID: "demo-1", claudeSessionID: "demo-1",

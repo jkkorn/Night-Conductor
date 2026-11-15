@@ -9,8 +9,8 @@
 # the release asset, not an earlier build.
 # Until the app is notarized, installs should add --no-quarantine (see caveats).
 cask "night-conductor" do
-  version "1.0.13"
-  sha256 "9cd4f7603b19303229b89cdf67139994a7daedf4dc0802b9b602fde21c2b18a6"
+  version "1.0.14"
+  sha256 "985bd0fcd57ae25b9b4c68cf1dd3dca4f8a3600ddaea846d23452712ea167c19"
 
   url "https://github.com/jkkorn/Night-Conductor/releases/download/v#{version}/Night-Conductor-#{version}.zip"
   name "Night Conductor"

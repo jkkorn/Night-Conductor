@@ -2,6 +2,45 @@
 
 All notable changes to Night Conductor. Dates are when the release was cut.
 
+## 1.0.14
+
+### Added
+- Your usage across Claude, ChatGPT and Grok. ChatGPT's weekly Codex limit is
+  read from Codex's own session logs, Grok's from the reading Grok Bot caches
+  on disk, so neither needs a login or a network call. Each account shows its
+  own app icon, plan ("Max 20x", "Pro"), "% used" and reset time.
+- A one-line summary on top ("All three on track."), with accounts that are
+  fine collapsed to a single line and anything that needs attention opened up
+  with a plain sentence about where the week is heading.
+- Alerts: "burning faster than usual" (Sensitive, Balanced or Relaxed) and "on
+  track to run out before reset". Each fires once, then stays quiet. The setup
+  checklist now asks for notification permission up front.
+- The menu bar shows whichever account needs attention, not just Claude.
+- When Claude is nearly used up with days left, a link to claude.ai's usage page
+  for its free limit resets (Night Conductor can't see or use those itself).
+
+### Changed
+- Weekly-only limits. Claude and ChatGPT dropped the 5-hour window (the usage
+  API now returns it as null). The app no longer shows a misleading "0%" 5-hour
+  meter, and the 5-hour ceiling and morning protection only apply to plans that
+  still have that window.
+- One wording everywhere: every percentage says "used".
+- A run-out warning needs a projected shortfall of at least a day; anything
+  closer reads "On track, but close" instead of a false alarm.
+- Readings older than a day are labelled as out of date and never forecast from
+  or alerted on.
+- Plainer copy, labelled Settings and Activity buttons, larger small text; the
+  credits and the share card moved into Settings.
+- The app is signed with the hardened runtime even for ad-hoc builds.
+
+### Security
+- Headless resumes only run for a session id that is a real UUID (so it can never
+  be read as a `claude` flag) in a project folder under your home folder: never
+  your home folder itself, a hidden folder like `~/.ssh`, or `~/Library`. A
+  terminal transcript must also sit in the folder Claude Code would have filed
+  it under. Applies to the app and the Python CLI.
+- The update link only ever opens this repo's GitHub releases.
+
 ## 1.0.13
 
 ### Added

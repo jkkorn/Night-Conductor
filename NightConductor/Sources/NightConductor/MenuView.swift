@@ -50,6 +50,7 @@ struct MenuView: View {
     // the identical pattern in SettingsPane below.
     @State private var hasAccessibility = UIResumer.hasAccessibilityPermission
     private let setupPermissionTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+    @State private var notificationsAllowed = true // assume yes until checked, so the card doesn't flash
     private let maxStalledRows = 6 // render this many; the rest auto-resume
 
     init(showSettings: Bool = false, showActivity: Bool = false) {
@@ -62,12 +63,10 @@ struct MenuView: View {
             header
             setupCard
             usageSection
-            decisionRow
-            stalledSection
+            nightWatchSection
             if showActivity { activityLog }
             Divider()
             footer
-            about
         }
         .padding(Design.l)
         .frame(width: 340)
@@ -81,6 +80,20 @@ struct MenuView: View {
         }
         .onReceive(setupPermissionTimer) { _ in
             hasAccessibility = UIResumer.hasAccessibilityPermission
+            Task { notificationsAllowed = await NotificationPermission.isAllowed() }
+        }
+        .task {
+            guard !state.isScreenshot else { return }
+            notificationsAllowed = await NotificationPermission.isAllowed()
+        }
+    }
+
+    /// The night watch, as one labelled section under your usage.
+    private var nightWatchSection: some View {
+        VStack(alignment: .leading, spacing: Design.m) {
+            Text("Night watch").font(.headline)
+            decisionRow
+            stalledSection
         }
     }
 
@@ -97,9 +110,10 @@ struct MenuView: View {
                 colors: [.black.opacity(0.22), .black.opacity(0.0), .black.opacity(0.40)],
                 startPoint: .top, endPoint: .bottom
             )
-            GlowingMoon(armed: state.armed)
-                .padding(Design.l)
-            HStack(alignment: .bottom) {
+            // One row, vertically centred: wordmark, moon, arm switch. (The
+            // moon used to sit in its own top corner, which collided with the
+            // switch once the header got shorter.)
+            HStack(alignment: .center, spacing: Design.l) {
                 VStack(alignment: .leading, spacing: Design.xs) {
                     Text("Night Conductor")
                         .font(.system(.title3, design: .serif).weight(.semibold))
@@ -112,6 +126,7 @@ struct MenuView: View {
                         .contentTransition(.opacity)
                 }
                 Spacer()
+                GlowingMoon(armed: state.armed, size: 24)
                 VStack(alignment: .trailing, spacing: Design.xs) {
                     Toggle("Arm night watch", isOn: Binding(
                         get: { state.armed },
@@ -127,15 +142,15 @@ struct MenuView: View {
                     .tint(.green)
                     .help("Arm or disarm the night watch")
                     Text(state.armed ? "ARMED" : "PAUSED")
-                        .font(.caption2.weight(.bold))
+                        .font(.caption.weight(.bold))
                         .foregroundStyle(state.armed ? Color.green : .white.opacity(0.6))
                         .contentTransition(.numericText())
                 }
             }
-            .padding(Design.l)
-            .frame(maxHeight: .infinity, alignment: .bottom)
+            .padding(.horizontal, Design.l)
+            .frame(maxHeight: .infinity, alignment: .center)
         }
-        .frame(height: 100)
+        .frame(height: 76) // usage is the hero now; the sky is the brand, not the content
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .overlay(
             RoundedRectangle(cornerRadius: 16)
@@ -154,7 +169,7 @@ struct MenuView: View {
         if let demo = state.screenshotSetup {
             setupCardBody(blocked: demo == "blocked", blockedCount: 2, armed: true,
                           launchAtLogin: true, usageReady: true, accessibility: false,
-                          onDismiss: demo == "blocked" ? nil : {})
+                          notifications: false, onDismiss: demo == "blocked" ? nil : {})
         } else {
             // Claude Desktop (Cowork) resume is Accessibility-only, no fallback, so
             // a stalled Cowork session with Accessibility off is fully blocked, and
@@ -164,12 +179,13 @@ struct MenuView: View {
             let blocked = !hasAccessibility && blockedCount > 0
             if SetupStatus.shouldShow(
                 accessibilityGranted: hasAccessibility, dismissed: setupDismissed,
-                isScreenshot: state.isScreenshot, hasBlockedSessions: blocked
+                isScreenshot: state.isScreenshot, hasBlockedSessions: blocked,
+                notificationsAllowed: notificationsAllowed
             ) {
                 setupCardBody(
                     blocked: blocked, blockedCount: blockedCount, armed: state.armed,
                     launchAtLogin: LoginItem.isEnabled, usageReady: state.usage != nil,
-                    accessibility: hasAccessibility,
+                    accessibility: hasAccessibility, notifications: notificationsAllowed,
                     onDismiss: blocked ? nil : { withAnimation { setupDismissed = true } }
                 )
             }
@@ -182,7 +198,7 @@ struct MenuView: View {
     /// lands on the single thing left to do.
     private func setupCardBody(
         blocked: Bool, blockedCount: Int, armed: Bool, launchAtLogin: Bool,
-        usageReady: Bool, accessibility: Bool, onDismiss: (() -> Void)?
+        usageReady: Bool, accessibility: Bool, notifications: Bool, onDismiss: (() -> Void)?
     ) -> some View {
         let accent: Color = blocked ? .orange : .indigo
         return VStack(alignment: .leading, spacing: Design.m) {
@@ -193,7 +209,7 @@ struct MenuView: View {
                     .font(.subheadline.weight(.semibold))
                 Spacer()
                 if let onDismiss {  // no dismiss while a session is actually blocked
-                    Button(action: onDismiss) { Image(systemName: "xmark").font(.caption2) }
+                    Button(action: onDismiss) { Image(systemName: "xmark").font(.caption) }
                         .buttonStyle(.plain).foregroundStyle(.secondary).help("Dismiss")
                 }
             }
@@ -205,18 +221,27 @@ struct MenuView: View {
             VStack(alignment: .leading, spacing: Design.s) {
                 setupStep(done: armed, "Night watch armed")
                 setupStep(done: launchAtLogin, "Launches at login")
-                setupStep(done: usageReady, "Reading your Claude usage")
+                setupStep(done: usageReady, "Reading your usage")
+                setupStep(done: notifications, pending: !notifications,
+                          "Notifications, so budget alerts reach you")
                 setupStep(done: accessibility, pending: !accessibility,
                           "Accessibility, so resumes show inside the app")
             }
-            if !blocked {
-                Text("Without it, resumes still run, just in the background instead of in the app's chat.")
-                    .font(.caption2).foregroundStyle(.secondary)
+            if !blocked && !accessibility {
+                Text("Without Accessibility, resumes still run, just in the background instead of in the app's chat.")
+                    .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Button("Open Accessibility Settings…") { UIResumer.openAccessibilitySettings() }
-                .controlSize(.small)
-                .tint(accent)
+            HStack(spacing: Design.m) {
+                if !notifications {
+                    Button("Allow Notifications") { Task { await NotificationPermission.requestOrOpenSettings() } }
+                        .controlSize(.small).tint(accent)
+                }
+                if !accessibility {
+                    Button("Open Accessibility Settings…") { UIResumer.openAccessibilitySettings() }
+                        .controlSize(.small).tint(accent)
+                }
+            }
         }
         .glassCard(tint: blocked ? .orange : nil)
     }
@@ -237,32 +262,15 @@ struct MenuView: View {
     private var subtitle: String {
         if let resuming = state.currentlyResuming { return "Conducting: \(resuming)…" }
         if state.isWorking { return "Checking…" }
-        return state.armed ? "Watching while you sleep" : "Paused"
+        guard state.armed else { return "Night watch paused" }
+        let config = PolicyConfig.fromDefaults()
+        let watchingNow = state.aroundTheClock || Policy.inActiveHours(
+            hour: Calendar.current.component(.hour, from: Date()), start: config.startHour, end: config.endHour)
+        return watchingNow ? "Watching while you sleep" : "Armed for tonight"
     }
 
-    private var usageSection: some View {
-        VStack(spacing: Design.m) {
-            UsageMeter(
-                label: "5-hour window",
-                window: state.usage?.fiveHour,
-                resetStyle: .time
-            )
-            UsageMeter(
-                label: "Weekly budget",
-                window: state.usage?.sevenDay,
-                resetStyle: .date
-            )
-            // A per-model weekly cap the plan scopes separately (e.g. Fable's
-            // own weekly allowance), shown only when the plan has one.
-            if let scoped = state.usage?.scopedWeekly {
-                UsageMeter(
-                    label: "\(scoped.modelName) weekly",
-                    window: scoped.window,
-                    resetStyle: .date
-                )
-            }
-        }
-    }
+    /// Every AI subscription we can read, one card each (BudgetViews.swift).
+    private var usageSection: some View { BudgetsSection() }
 
     private var decisionRow: some View {
         HStack(spacing: Design.m) {
@@ -323,7 +331,7 @@ struct MenuView: View {
                 }
                 if state.stalled.count > maxStalledRows {
                     Text("+ \(state.stalled.count - maxStalledRows) more, pin the ones you want resumed by day")
-                        .font(.caption2)
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                         .padding(.leading, 2)
                 }
@@ -355,12 +363,12 @@ struct MenuView: View {
                     Text(session.workspaceName)
                         .font(.caption).foregroundStyle(.secondary)
                     Text(session.source.label)
-                        .font(.caption2.weight(.medium))
+                        .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 5).padding(.vertical, 1)
                         .background(.secondary.opacity(0.15), in: Capsule())
                     Text(session.kind.shortLabel)
-                        .font(.caption2.weight(.medium))
+                        .font(.caption.weight(.medium))
                         .foregroundStyle(accent)
                         .padding(.horizontal, 5).padding(.vertical, 1)
                         .background(accent.opacity(0.15), in: Capsule())
@@ -397,7 +405,7 @@ struct MenuView: View {
                     activitySectionLabel("Recent resumes")
                     if resumes.isEmpty {
                         Text("Nothing resumed yet. Sessions you leave stalled on the limit show up here once the watch picks them back up.")
-                            .font(.caption2).foregroundStyle(.tertiary)
+                            .font(.caption).foregroundStyle(.tertiary)
                             .fixedSize(horizontal: false, vertical: true)
                     } else {
                         ForEach(Array(resumes.enumerated()), id: \.offset) { _, event in
@@ -409,7 +417,7 @@ struct MenuView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         activitySectionLabel("This session")
                         ForEach(state.activity.prefix(12), id: \.self) { line in
-                            Text(line).font(.caption2.monospaced())
+                            Text(line).font(.caption.monospaced())
                                 .foregroundStyle(.tertiary).lineLimit(1)
                         }
                     }
@@ -441,18 +449,18 @@ struct MenuView: View {
             activitySectionLabel("Last 24 hours")
             HStack(spacing: Design.s) {
                 Image(systemName: holding ? "bolt.horizontal.fill" : "pause.circle")
-                    .font(.caption2)
+                    .font(.caption)
                     .foregroundStyle(holding ? Color.indigo : Color.secondary)
                 Text(holding ? "Keeping your Mac awake now"
                              : "Not holding the Mac awake right now")
-                    .font(.caption2).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Text("Kept awake \(awakeText(awake)) and resumed \(resumes) session\(resumes == 1 ? "" : "s").")
-                .font(.caption2).foregroundStyle(.tertiary)
+                .font(.caption).foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
             if background > 0 {
                 Text("Background resumes land in your workspace, not the chat.")
-                    .font(.caption2).foregroundStyle(.tertiary)
+                    .font(.caption).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             // Only shown when something actually blocked resuming — silent on
@@ -461,9 +469,9 @@ struct MenuView: View {
             if let hold = longestHold, hold.seconds >= 60 {
                 HStack(alignment: .top, spacing: Design.s) {
                     Image(systemName: "exclamationmark.circle")
-                        .font(.caption2).foregroundStyle(.orange)
+                        .font(.caption).foregroundStyle(.orange)
                     Text("Held \(awakeText(hold.seconds)): \(hold.reason)")
-                        .font(.caption2).foregroundStyle(.orange)
+                        .font(.caption).foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -483,22 +491,19 @@ struct MenuView: View {
             HStack {
                 // No animation here: animated height changes make the
                 // MenuBarExtra window dismiss itself on some macOS versions.
-                ToolbarIconButton(systemName: "gearshape", label: "Settings") {
+                ToolbarTextButton(systemName: "gearshape", label: "Settings", isOn: showSettings) {
                     showSettings.toggle()
                 }
                 .accessibilityIdentifier("settingsButton")
-                ToolbarIconButton(systemName: "list.bullet.rectangle", label: "Activity") {
+                ToolbarTextButton(systemName: "list.bullet.rectangle", label: "Activity", isOn: showActivity) {
                     showActivity.toggle()
                 }
                 .accessibilityIdentifier("activityButton")
-                ToolbarIconButton(systemName: "square.and.arrow.up", label: "Share this week's stats") {
-                    StatCardExporter.share()
-                }
 
                 Spacer()
                 if let tick = state.lastTick {
-                    Text("Checked \(tick.formatted(date: .omitted, time: .shortened))")
-                        .font(.caption2).foregroundStyle(.secondary)
+                    Text("Updated \(tick.formatted(date: .omitted, time: .shortened))")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
 
@@ -531,7 +536,7 @@ private struct ActivityRow: View {
                     .foregroundStyle(.tertiary)
             }
             Text(Self.stamp(event.date))
-                .font(.caption2.monospaced())
+                .font(.caption.monospaced())
                 .foregroundStyle(.secondary)
                 .layoutPriority(1)
         }
@@ -549,6 +554,30 @@ private struct ActivityRow: View {
             return date.formatted(.dateTime.weekday(.abbreviated).hour().minute())
         }
         return date.formatted(.dateTime.month(.abbreviated).day().hour().minute())
+    }
+}
+
+/// A footer button with its name visible, so nobody has to guess which icon
+/// is Settings. Highlighted while its panel is open.
+struct ToolbarTextButton: View {
+    let systemName: String
+    let label: String
+    var isOn: Bool = false
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Label(label, systemImage: systemName)
+                .font(.callout)
+                .padding(.horizontal, Design.m).padding(.vertical, Design.s)
+                .background((hovering || isOn) ? Color.secondary.opacity(0.18) : .clear,
+                            in: .rect(cornerRadius: 6))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isOn ? .primary : .secondary)
+        .onHover { hovering = $0 }
     }
 }
 
@@ -578,9 +607,17 @@ struct ToolbarIconButton: View {
     }
 }
 
-extension MenuView {
-    var about: some View {
-        VStack(spacing: 2) {
+/// Version, credits and the shareable weekly card: useful, but not on every
+/// open of the popover. Lives at the bottom of Settings.
+struct AboutSection: View {
+    @EnvironmentObject var state: AppState
+
+    var body: some View {
+        VStack(spacing: Design.s) {
+            Button("Share this week\u{2019}s stats", systemImage: "square.and.arrow.up") {
+                StatCardExporter.share()
+            }
+            .controlSize(.small)
             if !state.isScreenshot {  // the offscreen render has no bundle version
                 Text("Night Conductor \(UpdateChecker.currentVersion)")
                     .foregroundStyle(.secondary)
@@ -593,8 +630,8 @@ extension MenuView {
             }
         }
         .frame(maxWidth: .infinity)
-        .font(.caption2)
-        .foregroundStyle(.tertiary)
+        .font(.caption)
+        .foregroundStyle(.secondary)
         .tint(.secondary)
     }
 }
@@ -622,7 +659,7 @@ struct UsageMeter: View {
                 Text(label).font(.subheadline.weight(.medium))
                 Spacer()
                 Text(resetText).font(.caption).foregroundStyle(.secondary)
-                Text(window == nil ? "·" : "\(Int(value))%")
+                Text(window == nil ? "·" : UsageWording.used(value))
                     .font(.subheadline.weight(.bold).monospacedDigit())
                     .foregroundStyle(Color.usageStatus(value))
                     .contentTransition(.numericText())
@@ -665,12 +702,19 @@ struct SettingsPane: View {
     @AppStorage("aroundTheClock") private var aroundTheClock = false
     @AppStorage("uiResume") private var uiResume = true
     @AppStorage("menuBarUsage") private var menuBarUsage = true
+    @AppStorage(AlertSettings.burnHotKey) private var alertBurnHot = true
+    @AppStorage(AlertSettings.runOutKey) private var alertRunOut = true
+    @AppStorage(AlertSettings.sensitivityKey) private var alertSensitivity = BurnSensitivity.balanced.rawValue
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var wakeScheduled = PowerManager.currentWakeSchedule() != nil
     // AXIsProcessTrusted() is only re-read on render, so poll while the
     // pane is open — the warning clears within seconds of granting.
     @State private var hasAccessibility = UIResumer.hasAccessibilityPermission
     private let permissionTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+
+    /// Claude and ChatGPT retired the 5-hour window; its controls only make
+    /// sense on a plan that still reports one.
+    private var hasFiveHourWindow: Bool { state.usage?.fiveHour != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Design.m) {
@@ -681,15 +725,17 @@ struct SettingsPane: View {
                 Text("I'm back at").font(.caption)
                 HourStepper(hour: $endHour)
             }
-            Text("Nothing starts after \(((endHour - 5) + 24) % 24):00, so your 5-hour window is fresh when you sit down.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if hasFiveHourWindow {
+                Text("Nothing starts after \(((endHour - 5) + 24) % 24):00, so your 5-hour window is fresh when you sit down.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             Toggle("Resume around the clock", isOn: $aroundTheClock)
                 .font(.caption)
                 .toggleStyle(.checkbox)
             Text("Resumes whenever there's budget, not just at night, and keeps your Mac awake so it's ready the moment your limit resets. Best when you're plugged in. Ignores the hours above.")
-                .font(.caption2)
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
             HStack {
@@ -697,7 +743,7 @@ struct SettingsPane: View {
                 Spacer()
                 if wakeScheduled {
                     Label("scheduled", systemImage: "checkmark.circle.fill")
-                        .font(.caption2).foregroundStyle(.green)
+                        .font(.caption).foregroundStyle(.green)
                     Button("Remove") {
                         if PowerManager.cancelNightlyWake() { wakeScheduled = false }
                     }.controlSize(.small)
@@ -708,30 +754,54 @@ struct SettingsPane: View {
                 }
             }
             Text("Night Conductor keeps your Mac awake during the watch by itself. Schedule a wake only if your Mac fully sleeps before then (asks for your password once). It can wake your Mac from sleep, but it cannot turn on a Mac that is shut down.")
-                .font(.caption2)
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            HStack(spacing: Design.l) {
-                Text("5h ceiling \(Int(fiveHourCeiling))%")
-                    .font(.caption).frame(width: 96, alignment: .leading)
-                NightSlider(value: $fiveHourCeiling, range: 50...100, step: 5)
+            if hasFiveHourWindow {
+                HStack(spacing: Design.l) {
+                    Text("5h: stop at \(Int(fiveHourCeiling))% used")
+                        .font(.caption).frame(width: 118, alignment: .leading)
+                    NightSlider(value: $fiveHourCeiling, range: 50...100, step: 5)
+                }
             }
             HStack(spacing: Design.l) {
-                Text("Weekly stop \(Int(weeklyCeiling))%")
-                    .font(.caption).frame(width: 96, alignment: .leading)
+                Text("Stop at \(Int(weeklyCeiling))% used")
+                    .font(.caption).frame(width: 118, alignment: .leading)
                 NightSlider(value: $weeklyCeiling, range: 50...100, step: 5)
             }
             HStack(spacing: Design.l) {
                 Text("Resume pace \(Int(resumePaceMinutes))m")
-                    .font(.caption).frame(width: 96, alignment: .leading)
+                    .font(.caption).frame(width: 118, alignment: .leading)
                 NightSlider(value: $resumePaceMinutes, range: 5...20, step: 1)
             }
             Text("How often the watch attempts a resume overnight. Higher spreads them out more.")
-                .font(.caption2).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Toggle("Show 5h usage in menu bar", isOn: $menuBarUsage)
+            Toggle("Show Claude usage in menu bar", isOn: $menuBarUsage)
                 .font(.caption)
                 .toggleStyle(.checkbox)
+            Divider()
+            Text("Alerts").font(.caption).bold()
+            Toggle("Tell me when I'm burning faster than usual", isOn: $alertBurnHot)
+                .font(.caption)
+                .toggleStyle(.checkbox)
+            if alertBurnHot {
+                SensitivityPicker(selection: Binding(
+                    get: { BurnSensitivity(rawValue: alertSensitivity) ?? .balanced },
+                    set: { alertSensitivity = $0.rawValue }
+                ))
+                .padding(.leading, 18)
+                Text((BurnSensitivity(rawValue: alertSensitivity) ?? .balanced).explanation)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .padding(.leading, 18)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Toggle("Warn me if I'll run out before a reset", isOn: $alertRunOut)
+                .font(.caption)
+                .toggleStyle(.checkbox)
+            Text("Covers every budget above. Each warning is sent once, then stays quiet: run-out once per week, burning fast at most every 3 hours.")
+                .font(.caption).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
             Toggle("Launch at login", isOn: $launchAtLogin)
                 .font(.caption)
                 .toggleStyle(.checkbox)
@@ -753,13 +823,13 @@ struct SettingsPane: View {
             if uiResume {
                 if hasAccessibility {
                     Text("Presses Conductor's own Retry button, so the chat stays in sync. Falls back to a headless resume if that fails.")
-                        .font(.caption2)
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
                     VStack(alignment: .leading, spacing: Design.s) {
                         Text("Needs Accessibility access to press Conductor's Retry button.")
-                            .font(.caption2)
+                            .font(.caption)
                             .foregroundStyle(.orange)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         Button("Open Accessibility Settings…") {
@@ -788,7 +858,7 @@ struct SettingsPane: View {
                 .controlSize(.small)
                 .disabled(checkingUpdate)
             }
-            if let update = state.update, let url = URL(string: update.url) {
+            if let update = state.update, let url = URL(string: UpdateChecker.safeReleaseURL(update.url)) {
                 HStack(spacing: Design.s) {
                     Image(systemName: "arrow.down.circle.fill").foregroundStyle(.green)
                     Text("Update available: \(update.version)").font(.caption)
@@ -797,8 +867,10 @@ struct SettingsPane: View {
                 }
             } else if checkedUpToDate {
                 Text("You're on the latest version.")
-                    .font(.caption2).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(.secondary)
             }
+            Divider().opacity(0.4)
+            AboutSection()
         }
         .glassCard()
         .onReceive(permissionTimer) { _ in

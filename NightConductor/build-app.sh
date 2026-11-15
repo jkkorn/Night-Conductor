@@ -21,8 +21,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
     <key>CFBundleName</key><string>Night Conductor</string>
     <key>CFBundleDisplayName</key><string>Night Conductor</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>1.0.13</string>
-    <key>CFBundleVersion</key><string>14</string>
+    <key>CFBundleShortVersionString</key><string>1.0.14</string>
+    <key>CFBundleVersion</key><string>15</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>LSMinimumSystemVersion</key><string>15.0</string>
     <key>LSUIElement</key><true/>
@@ -55,8 +55,10 @@ if [ -n "$IDENTITY" ] && [ "$IDENTITY" != "-" ]; then
     echo "▸ Signing (Developer ID: $IDENTITY, hardened runtime)…"
     codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP_DIR"
 else
-    echo "▸ Signing (ad-hoc — no Developer ID cert found)…"
-    codesign --force -s - "$APP_DIR"
+    echo "▸ Signing (ad-hoc + hardened runtime — no Developer ID cert found)…"
+    # Hardened runtime even when ad-hoc: blocks DYLD_* injection, so another
+    # process can't borrow this app's Accessibility trust (security audit M1).
+    codesign --force --options runtime -s - "$APP_DIR"
 fi
 
 echo ""

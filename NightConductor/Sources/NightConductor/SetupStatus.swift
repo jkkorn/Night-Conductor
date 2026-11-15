@@ -8,8 +8,9 @@ import Foundation
 /// and never during an offscreen documentation render.
 enum SetupStatus {
     static func shouldShow(accessibilityGranted: Bool, dismissed: Bool,
-                           isScreenshot: Bool, hasBlockedSessions: Bool = false) -> Bool {
-        if isScreenshot || accessibilityGranted { return false }
+                           isScreenshot: Bool, hasBlockedSessions: Bool = false,
+                           notificationsAllowed: Bool = true) -> Bool {
+        if isScreenshot || (accessibilityGranted && notificationsAllowed) { return false }
         // Dismissal is respected until a session is ACTUALLY blocked on the
         // missing permission, then re-raise: "I can't act" must not be
         // dismissable into silence. This closes the permanent-dismissal hole,

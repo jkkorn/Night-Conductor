@@ -31,6 +31,18 @@ enum UsageClient {
     struct OAuthCredential {
         let token: String
         let expiresAt: Date?
+        var plan: String? = nil
+    }
+
+    /// "Max 20x", "Max 5x", "Pro": the plan name as Claude shows it, from the
+    /// credential's `subscriptionType` / `rateLimitTier`. Display only.
+    static func planLabel(subscriptionType: String?, rateLimitTier: String?) -> String? {
+        guard let type = subscriptionType?.prefix(24), !type.isEmpty else { return nil }
+        if let tier = rateLimitTier,
+           let range = tier.range(of: #"\d+x$"#, options: .regularExpression) {
+            return "\(type.capitalized) \(tier[range])"
+        }
+        return type.capitalized
     }
 
     /// A token is treated as expired a little early (clock-skew buffer) so we
@@ -71,7 +83,9 @@ enum UsageClient {
             let seconds = raw > 1e11 ? raw / 1000 : raw
             expiresAt = Date(timeIntervalSince1970: seconds)
         }
-        return OAuthCredential(token: token, expiresAt: expiresAt)
+        return OAuthCredential(token: token, expiresAt: expiresAt,
+                               plan: planLabel(subscriptionType: oauth["subscriptionType"] as? String,
+                                               rateLimitTier: oauth["rateLimitTier"] as? String))
     }
 
     /// Back-compat: just the access token.
@@ -84,6 +98,18 @@ enum UsageClient {
         let utilization = (dict["utilization"] as? NSNumber)?.doubleValue ?? 0
         let resetsAt = (dict["resets_at"] as? String).flatMap(ISO.parse)
         return UsageWindow(utilization: utilization, resetsAt: resetsAt)
+    }
+
+    /// A window the API may send as `null` (Claude's retired 5-hour window).
+    static func parseOptionalWindow(_ raw: Any?) -> UsageWindow? {
+        guard raw is [String: Any] else { return nil }
+        return parseWindow(raw)
+    }
+
+    /// `seven_day_breakdown.window_started_at`: when this weekly window opened.
+    static func parseWindowStart(_ raw: Any?) -> Date? {
+        guard let dict = raw as? [String: Any] else { return nil }
+        return (dict["window_started_at"] as? String).flatMap(ISO.parse)
     }
 
     static func fetchUsage(now: Date = Date()) async throws -> UsageSnapshot {
@@ -114,9 +140,11 @@ enum UsageClient {
             throw UsageError.badPayload
         }
         return UsageSnapshot(
-            fiveHour: parseWindow(object["five_hour"]),
+            fiveHour: parseOptionalWindow(object["five_hour"]),
             sevenDay: parseWindow(object["seven_day"]),
             scopedWeekly: parseScopedWeekly(object["limits"]),
+            weeklyStartedAt: parseWindowStart(object["seven_day_breakdown"]),
+            plan: cred.plan,
             fetchedAt: now
         )
     }

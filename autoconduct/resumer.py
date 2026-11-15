@@ -2,13 +2,40 @@
 
 from __future__ import annotations
 
+import os
+import re
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 
 from .conductor_db import StalledSession
 from .config import Config
 
 RESUME_TIMEOUT_SECONDS = 60 * 60  # one long agentic run, but never forever
+
+_UUID = re.compile(r"^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$")
+
+
+def is_safe_resume(session_id: str, workspace: str, home: str | None = None) -> bool:
+    """Mirror of the app's ResumeSafety (security audit H1/H2).
+
+    Both values come from another app's database. The id must be a UUID (so
+    `claude` can never parse it as a flag) and the workspace must be a project
+    folder strictly under $HOME: not $HOME itself, not ~/Library, and with no
+    hidden component, so a crafted row can't aim an acceptEdits agent at
+    your dotfiles.
+    """
+    if not _UUID.match(session_id or ""):
+        return False
+    if not workspace or not workspace.startswith("/"):
+        return False
+    base = Path(os.path.realpath(home or os.path.expanduser("~")))
+    target = Path(os.path.realpath(workspace))
+    try:
+        parts = target.relative_to(base).parts
+    except ValueError:
+        return False
+    return bool(parts) and parts[0] != "Library" and not any(p.startswith(".") for p in parts)
 
 
 @dataclass(frozen=True)
@@ -26,6 +53,8 @@ def resume_session(
     Headless print mode (-p) so the run terminates on its own. Work lands
     in the workspace files/git; Conductor's chat UI won't show the turns.
     """
+    if not is_safe_resume(session.claude_session_id, session.workspace_path):
+        return ResumeResult(session.session_id, False, "refused: session id or workspace failed safety checks")
     cmd = [
         "claude",
         "--resume",

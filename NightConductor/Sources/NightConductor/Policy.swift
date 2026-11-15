@@ -37,7 +37,7 @@ enum Policy {
             // over, not "outside <something> hours".
             return Decision(
                 resume: false,
-                reason: "You're at the helm, night watch starts at \(config.startHour):00",
+                reason: "Night watch starts at \(config.startHour):00. It resumes stalled sessions while you sleep.",
                 state: .standingBy
             )
         }
@@ -46,7 +46,9 @@ enum Policy {
         // A session started now anchors a 5h window — never start one that
         // would still be hot when they sit down (a 6am resume would lock
         // them out until 11am).
-        if !ignoreActiveHours, config.startHour != config.endHour {
+        // Only meaningful while the plan HAS a 5-hour window. Weekly-only plans
+        // (Claude and ChatGPT since the change) have nothing to keep fresh.
+        if !ignoreActiveHours, config.startHour != config.endHour, usage.fiveHour != nil {
             let minute = calendar.component(.minute, from: now)
             let nowFrac = Double(hour) + Double(minute) / 60.0
             let remaining = hoursUntilWake(nowHour: nowFrac, wakeHour: config.endHour)
@@ -68,19 +70,19 @@ enum Policy {
     /// around-the-clock auto-resume (which should respect spend but not the
     /// night window).
     static func budgetAllows(usage: UsageSnapshot, config: PolicyConfig, now: Date) -> Decision {
-        if usage.fiveHour.utilization >= config.fiveHourCeiling {
+        if let fiveHour = usage.fiveHour, fiveHour.utilization >= config.fiveHourCeiling {
             return Decision(
                 resume: false,
-                reason: "5-hour window at \(Int(usage.fiveHour.utilization))% "
-                    + "(ceiling \(Int(config.fiveHourCeiling))%)"
+                reason: "5-hour window: \(Int(fiveHour.utilization))% used, "
+                    + "past your \(Int(config.fiveHourCeiling))% stop"
             )
         }
 
         if usage.sevenDay.utilization >= config.weeklyCeiling {
             return Decision(
                 resume: false,
-                reason: "Weekly window at \(Int(usage.sevenDay.utilization))% "
-                    + "(ceiling \(Int(config.weeklyCeiling))%)"
+                reason: "This week: \(Int(usage.sevenDay.utilization))% used, "
+                    + "past your \(Int(config.weeklyCeiling))% stop"
             )
         }
 
@@ -93,14 +95,14 @@ enum Policy {
         if weekUsed > allowed {
             return Decision(
                 resume: false,
-                reason: "Weekly burn too fast: \(Int(weekUsed))% used, "
+                reason: "Using the week too fast: \(Int(weekUsed))% used, "
                     + String(format: "%.1f", daysLeft) + " days to reset"
             )
         }
 
         return Decision(
             resume: true,
-            reason: "Wiggle room: \(Int(weekUsed))% of week used, "
+            reason: "Room to spare: \(Int(weekUsed))% used this week, "
                 + String(format: "%.1f", daysLeft) + " days to reset",
             state: .resuming
         )

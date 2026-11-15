@@ -48,7 +48,17 @@ enum UpdateChecker {
             let tag = object["tag_name"] as? String
         else { return nil }
         let version = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
-        let url = (object["html_url"] as? String) ?? releasesPage
-        return Release(version: version, url: url)
+        return Release(version: version, url: safeReleaseURL(object["html_url"] as? String))
+    }
+
+    /// The release link comes from a network response, and the UI opens it.
+    /// Only ever open this repo's release pages over HTTPS; anything else
+    /// (another host, file://, a lookalike repo) falls back to the known page.
+    static func safeReleaseURL(_ raw: String?) -> String {
+        guard let raw, let components = URLComponents(string: raw),
+              components.scheme == "https", components.host == "github.com",
+              components.path.hasPrefix("/jkkorn/Night-Conductor/releases/")
+        else { return releasesPage }
+        return raw
     }
 }

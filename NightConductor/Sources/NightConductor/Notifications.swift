@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import UserNotifications
 
@@ -34,5 +35,30 @@ enum Notifications {
             trigger: nil // deliver now
         )
         UNUserNotificationCenter.current().add(request)
+    }
+}
+
+/// Notification permission for budget alerts, asked from the setup checklist
+/// (at a calm moment, with the reason shown) rather than mid-alarm.
+enum NotificationPermission {
+    static func isAllowed() async -> Bool {
+        let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        return status == .authorized || status == .provisional
+    }
+
+    /// Ask if macOS hasn't asked yet; if the user said no before, macOS won't
+    /// ask again, so open the Notifications settings instead.
+    static func requestOrOpenSettings() async {
+        let center = UNUserNotificationCenter.current()
+        switch await center.notificationSettings().authorizationStatus {
+        case .notDetermined:
+            _ = try? await center.requestAuthorization(options: [.alert, .sound])
+        default:
+            await MainActor.run {
+                if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+        }
     }
 }

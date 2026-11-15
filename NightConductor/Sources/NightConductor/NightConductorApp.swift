@@ -39,6 +39,21 @@ enum Main {
             }
             return
         }
+        if args.contains("--usage") {
+            // Local readers only (no network, no credentials): proof of what
+            // the budgets section will show for ChatGPT and Grok.
+            let now = Date()
+            let log = UsageSampleLog.load()
+            for reading in [CodexUsageReader.read(), GrokBotUsageReader.read()].compactMap({ $0 }) {
+                let shown = reading.normalized(now: now)
+                let a = BurnForecast.assess(usage: shown, samples: log.samples(for: shown.provider), now: now)
+                print("\(shown.provider.displayName) [\(shown.source)\(shown.plan.map { ", \($0)" } ?? "")]: "
+                      + "\(UsageWording.used(shown.weekly.utilization)) this week, resets \(shown.weekly.resetsAt.map { "\($0)" } ?? "n/a"), "
+                      + "read \(reading.readAt), status: \(PaceStatus.of(shown, a).sentence(usage: shown, assessment: a))")
+            }
+            print("Other AI tools without usage data: \(InstalledAITools.detectWithoutUsage())")
+            return
+        }
         if args.contains("--scan") {
             let conductor = (try? ConductorDB.findStalledSessions()) ?? []
             let claude = ClaudeDesktopDB.findStalledSessions()
@@ -69,9 +84,9 @@ struct NightConductorApp: App {
     }
 }
 
-/// The menu bar item: a ring gauge that fills with your live 5-hour usage —
-/// the number that decides whether you can run Claude right now — so it reads
-/// as a consumption meter, not a weather glyph. Dims when paused. Falls back
+/// The menu bar item: a ring gauge that fills with your live Claude usage
+/// (the weekly budget now that the 5-hour window is gone; the 5-hour one if a
+/// plan still has it), so it reads as a consumption meter, not a weather glyph. Dims when paused. Falls back
 /// to the moon when usage display is turned off.
 struct MenuBarLabel: View {
     @ObservedObject var state: AppState
@@ -80,13 +95,25 @@ struct MenuBarLabel: View {
 
     var body: some View {
         if menuBarUsage, let usage = state.usage {
-            let pct = usage.fiveHour.utilization
+            // Show Claude, unless another account needs attention right now:
+            // the menu bar is what you see all day, so it must not hide a problem.
+            let rows = state.providers.map { ($0, state.assessments[$0.provider] ?? .unknown) }
+            let urgent = UsageSummary.mostUrgent(rows)
+            let pct = urgent?.weekly.utilization ?? (usage.fiveHour ?? usage.sevenDay).utilization
+            let who = urgent?.provider.displayName ?? "Claude"
+            let tint = urgent.map { PaceStatus.of($0, state.assessments[$0.provider] ?? .unknown).warningTint } ?? nil
             HStack(spacing: 3) {
-                UsageRing(value: pct, armed: armed)
+                if let urgent {
+                    ProviderIcon(provider: urgent.provider, size: 14)
+                }
+                UsageRing(value: pct, armed: armed, tint: tint)
                 Text("\(Int(pct))%")
                     .font(.system(size: 11, weight: .semibold).monospacedDigit())
                     .foregroundStyle(armed ? .primary : .secondary)
             }
+            // Too tight for the word in the menu bar itself; say it in full here.
+            .help("\(who): \(UsageWording.used(pct)) this week")
+            .accessibilityLabel("\(who): \(UsageWording.used(pct)) this week")
         } else {
             Image(systemName: armed ? "moon.stars.fill" : "moon.zzz")
         }

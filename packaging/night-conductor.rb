@@ -14,7 +14,7 @@ cask "night-conductor" do
 
   url "https://github.com/jkkorn/Night-Conductor/releases/download/v#{version}/Night-Conductor-#{version}.zip"
   name "Night Conductor"
-  desc "Resume Conductor sessions that hit the Claude usage limit, while you sleep"
+  desc "Weekly AI usage at a glance, and stalled sessions resumed while you sleep"
   homepage "https://github.com/jkkorn/Night-Conductor"
 
   depends_on macos: ">= :sequoia"
@@ -30,6 +30,7 @@ cask "night-conductor" do
 
   zap trash: [
     "~/Library/Preferences/app.night-conductor.plist",
+    "~/Library/Application Support/Night Conductor",
     "~/Library/LaunchAgents/com.autoconduct.agent.plist",
   ]
 end

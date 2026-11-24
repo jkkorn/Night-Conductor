@@ -13,14 +13,24 @@ enum ResumeHistory {
     private static let key = "resumeHistory"
     private static let maxAge: TimeInterval = 30 * 86_400
 
+    /// Titles are often the opening words of someone's prompt: keep only
+    /// enough to recognize the session.
+    static let maxTitleLength = 50
+
     static func record(_ event: ResumeEvent, defaults: UserDefaults = .standard) {
+        let trimmed = ResumeEvent(date: event.date, title: String(event.title.prefix(maxTitleLength)),
+                                  kind: event.kind, inConductor: event.inConductor)
         var events = load(defaults: defaults)
-        events.append(event)
+        events.append(trimmed)
         let cutoff = event.date.addingTimeInterval(-maxAge)
         events = events.filter { $0.date >= cutoff }
         if let data = try? JSONEncoder().encode(events) {
             defaults.set(data, forKey: key)
         }
+    }
+
+    static func clear(defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: key)
     }
 
     static func load(defaults: UserDefaults = .standard) -> [ResumeEvent] {

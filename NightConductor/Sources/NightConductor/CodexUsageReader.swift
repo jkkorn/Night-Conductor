@@ -67,8 +67,12 @@ enum CodexUsageReader {
         guard let weekly = windows.max(by: { minutes($0) < minutes($1) }),
               let used = (weekly["used_percent"] as? NSNumber)?.doubleValue
         else { return nil }
-        let resets = (weekly["resets_at"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) }
-        let readAt = (object["timestamp"] as? String).flatMap(ISO.parse) ?? Date()
+        let readAt = SafeFile.plausibleReadAt((object["timestamp"] as? String).flatMap(ISO.parse))
+        // Judged against when the reading was taken: an old log's reset may
+        // already be past, but never decades off.
+        let resets = SafeFile.plausibleReset(
+            (weekly["resets_at"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) },
+            now: readAt)
         let plan = (limits["plan_type"] as? String).map { $0.prefix(24).capitalized }
         return ProviderUsage(
             provider: .chatgpt, source: "Codex", plan: plan,
@@ -78,7 +82,9 @@ enum CodexUsageReader {
         )
     }
 
+    /// Window length in minutes, bounded to 1 minute to 31 days.
     private static func minutes(_ window: [String: Any]) -> Double {
-        (window["window_minutes"] as? NSNumber)?.doubleValue ?? 0
+        let raw = (window["window_minutes"] as? NSNumber)?.doubleValue ?? 0
+        return raw.isFinite ? min(max(raw, 0), 31 * 24 * 60) : 0
     }
 }

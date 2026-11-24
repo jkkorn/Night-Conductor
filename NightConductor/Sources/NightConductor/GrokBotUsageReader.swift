@@ -61,13 +61,18 @@ enum GrokBotUsageReader {
               let usage = reading["usage"] as? [String: Any],
               let percent = (usage["percentUsed"] as? NSNumber)?.doubleValue
         else { return nil }
-        let resets = (usage["nextResetMs"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue / 1000) }
-        let readAt = (reading["readAtMs"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue / 1000) }
+        // Grok Bot's cache can be days old, so a reset slightly in the past is
+        // expected; only absurd values are dropped. A future read time is clamped.
+        let resets = (usage["nextResetMs"] as? NSNumber)
+            .map { Date(timeIntervalSince1970: $0.doubleValue / 1000) }
+            .flatMap { $0.timeIntervalSince1970.isFinite && abs($0.timeIntervalSinceNow) < 366 * 86_400 ? $0 : nil }
+        let readAt = SafeFile.plausibleReadAt(
+            (reading["readAtMs"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue / 1000) })
         let plan = (usage["grokPlanLabel"] as? String).map { String($0.prefix(32)) }
         return ProviderUsage(
             provider: .grok, source: "Grok Bot", plan: plan,
             weekly: UsageWindow(utilization: SafeFile.clampPercent(percent), resetsAt: resets),
-            readAt: readAt ?? Date()
+            readAt: readAt
         )
     }
 }

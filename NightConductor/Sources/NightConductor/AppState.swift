@@ -471,10 +471,12 @@ final class AppState: ObservableObject {
                     }.value
                     handedToApp = result.ok
                     if !result.ok {
-                        log("↻ UI resume failed (\(result.detail)), falling back to headless")
+                        log(result.pressed
+                            ? "↻ pressed Retry, not confirmed yet (\(result.detail)); no headless fallback"
+                            : "↻ UI resume failed (\(result.detail)), falling back to headless")
                     }
                 }
-                if !result.ok, let claudePath = await claudeBinary() {
+                if !result.ok, !result.pressed, let claudePath = await claudeBinary() {
                     result = await Task.detached(priority: .utility) {
                         Resumer.resume(session: session, claudePath: claudePath, config: config)
                     }.value

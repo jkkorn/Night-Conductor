@@ -42,6 +42,9 @@ enum Notifications {
 /// (at a calm moment, with the reason shown) rather than mid-alarm.
 enum NotificationPermission {
     static func isAllowed() async -> Bool {
+        // Outside an app bundle (tests, offscreen renders) macOS throws on
+        // UNUserNotificationCenter.current(); there's nothing to ask there.
+        guard Bundle.main.bundleURL.pathExtension == "app" else { return true }
         let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
         return status == .authorized || status == .provisional
     }
@@ -49,6 +52,7 @@ enum NotificationPermission {
     /// Ask if macOS hasn't asked yet; if the user said no before, macOS won't
     /// ask again, so open the Notifications settings instead.
     static func requestOrOpenSettings() async {
+        guard Bundle.main.bundleURL.pathExtension == "app" else { return }
         let center = UNUserNotificationCenter.current()
         switch await center.notificationSettings().authorizationStatus {
         case .notDetermined:

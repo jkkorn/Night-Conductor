@@ -28,6 +28,7 @@ enum Screenshotter {
             .fixedSize(horizontal: false, vertical: true)
             .background(Color(red: 0.12, green: 0.12, blue: 0.14))
             .environment(\.colorScheme, .dark)
+            .environment(\.isStillRender, true)
         renderHosting(AnyView(root), to: path)
     }
 

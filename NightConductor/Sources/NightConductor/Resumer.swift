@@ -3,6 +3,10 @@ import Foundation
 struct ResumeResult {
     let ok: Bool
     let detail: String
+    /// True when Retry was already pressed in the app, even if we couldn't
+    /// confirm the session started. A headless fallback must never follow:
+    /// it would put a second auto-accepting agent in the same worktree.
+    var pressed: Bool = false
 }
 
 /// Thread-safe accumulator for a pipe drained on a background queue.
@@ -80,7 +84,9 @@ enum Resumer {
             "-p", config.resumePrompt,
             "--permission-mode", config.permissionMode,
         ]
-        process.currentDirectoryURL = URL(fileURLWithPath: session.workspacePath)
+        // Launch in the same resolved folder the safety check approved, so a
+        // symlink swapped in between can't redirect the agent.
+        process.currentDirectoryURL = URL(fileURLWithPath: session.workspacePath).resolvingSymlinksInPath()
 
         // claude is typically a node script; make sure its interpreter is
         // reachable by prepending the binary's own directory to PATH.

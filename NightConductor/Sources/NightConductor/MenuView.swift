@@ -30,16 +30,6 @@ extension Color {
     }
 }
 
-extension View {
-    /// The single card surface used by the decision pill and settings pane.
-    func cardSurface() -> some View {
-        padding(Design.l)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.quaternary.opacity(0.5),
-                        in: RoundedRectangle(cornerRadius: Design.cardRadius))
-    }
-}
-
 struct MenuView: View {
     @EnvironmentObject var state: AppState
     @State private var showSettings: Bool
@@ -64,12 +54,15 @@ struct MenuView: View {
             setupCard
             usageSection
             nightWatchSection
+                .revealOnAppear(index: 5)
             if showActivity { activityLog }
             Divider()
             footer
+                .revealOnAppear(index: 6)
         }
         .padding(Design.l)
         .frame(width: 340)
+        .background(PopoverBackdrop().ignoresSafeArea())
         // Opening the popover is an explicit "show me now". If the cached
         // reading is stale, force a refresh (which also punches through a 429
         // backoff); if it's already fresh, stay throttled to avoid hammering.
@@ -80,7 +73,9 @@ struct MenuView: View {
         }
         .onReceive(setupPermissionTimer) { _ in
             hasAccessibility = UIResumer.hasAccessibilityPermission
-            Task { notificationsAllowed = await NotificationPermission.isAllowed() }
+            if !state.isScreenshot {
+                Task { notificationsAllowed = await NotificationPermission.isAllowed() }
+            }
         }
         .task {
             guard !state.isScreenshot else { return }
@@ -376,12 +371,15 @@ struct MenuView: View {
             }
             Spacer()
             // Pin = auto-resume this session around the clock (not just at night).
-            Button { state.togglePin(session) } label: {
-                Image(systemName: pinned ? "repeat.circle.fill" : "repeat.circle")
-                    .font(.title3)
-                    .foregroundStyle(pinned ? Color.indigo : .secondary)
+            Button(pinned ? "Stop auto-resuming any time" : "Auto-resume any time",
+                   systemImage: pinned ? "repeat.circle.fill" : "repeat.circle") {
+                state.togglePin(session)
             }
+            .labelStyle(.iconOnly)
+            .font(.title3)
+            .foregroundStyle(pinned ? Color.indigo : .secondary)
             .buttonStyle(.plain)
+            .accessibilityAddTraits(pinned ? .isSelected : [])
             .help(pinned
                   ? "Auto-resuming any time, click to stop"
                   : "Auto-resume this session any time (not just at night)")
@@ -430,7 +428,7 @@ struct MenuView: View {
 
     private func activitySectionLabel(_ text: String) -> some View {
         Text(text.uppercased())
-            .font(.system(size: 9, weight: .semibold))
+            .font(.caption).bold()
             .tracking(0.6)
             .foregroundStyle(.tertiary)
     }
@@ -504,6 +502,8 @@ struct MenuView: View {
                 if let tick = state.lastTick {
                     Text("Updated \(tick.formatted(date: .omitted, time: .shortened))")
                         .font(.caption).foregroundStyle(.secondary)
+                        .contentTransition(.numericText())
+                        .animation(Motion.fill, value: tick)
                 }
                 Spacer()
 
@@ -523,8 +523,9 @@ private struct ActivityRow: View {
     var body: some View {
         HStack(spacing: Design.m) {
             Image(systemName: "moon.fill")
-                .font(.system(size: 9))
+                .font(.caption)
                 .foregroundStyle(Color.indigo)
+                .accessibilityHidden(true)
             Text(event.title)
                 .font(.caption)
                 .lineLimit(1)
@@ -532,7 +533,7 @@ private struct ActivityRow: View {
             Spacer(minLength: Design.s)
             if event.inConductor {
                 Text("in app")
-                    .font(.system(size: 9, weight: .medium))
+                    .font(.caption)
                     .foregroundStyle(.tertiary)
             }
             Text(Self.stamp(event.date))
@@ -581,41 +582,25 @@ struct ToolbarTextButton: View {
     }
 }
 
-/// A menu-bar-style icon button: real hit target plus a hover highlight, so
-/// it reads as clickable instead of a dim decorative glyph.
-struct ToolbarIconButton: View {
-    let systemName: String
-    let label: String
-    let action: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .frame(width: 26, height: 22)
-                .background(
-                    hovering ? Color.secondary.opacity(0.18) : .clear,
-                    in: RoundedRectangle(cornerRadius: 5)
-                )
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
-        .onHover { hovering = $0 }
-        .help(label)
-        .accessibilityLabel(label)
-    }
-}
-
 /// Version, credits and the shareable weekly card: useful, but not on every
 /// open of the popover. Lives at the bottom of Settings.
 struct AboutSection: View {
     @EnvironmentObject var state: AppState
+    @State private var historyCleared = false
 
     var body: some View {
         VStack(spacing: Design.s) {
-            Button("Share this week\u{2019}s stats", systemImage: "square.and.arrow.up") {
-                StatCardExporter.share()
+            HStack {
+                Button("Share this week\u{2019}s stats", systemImage: "square.and.arrow.up") {
+                    StatCardExporter.share()
+                }
+                Button(historyCleared ? "History cleared" : "Clear history",
+                       systemImage: historyCleared ? "checkmark" : "trash") {
+                    state.clearLocalHistory()
+                    historyCleared = true
+                }
+                .disabled(historyCleared)
+                .help("Forget resumed session titles, keep-awake logs and usage samples on this Mac")
             }
             .controlSize(.small)
             if !state.isScreenshot {  // the offscreen render has no bundle version
@@ -720,10 +705,10 @@ struct SettingsPane: View {
         VStack(alignment: .leading, spacing: Design.m) {
             HStack {
                 Text("Watch from").font(.caption)
-                HourStepper(hour: $startHour)
+                HourStepper(hour: $startHour, label: "Watch from")
                 Spacer()
                 Text("I'm back at").font(.caption)
-                HourStepper(hour: $endHour)
+                HourStepper(hour: $endHour, label: "I'm back at")
             }
             if hasFiveHourWindow {
                 Text("Nothing starts after \(((endHour - 5) + 24) % 24):00, so your 5-hour window is fresh when you sit down.")
@@ -761,18 +746,21 @@ struct SettingsPane: View {
                 HStack(spacing: Design.l) {
                     Text("5h: stop at \(Int(fiveHourCeiling))% used")
                         .font(.caption).frame(width: 118, alignment: .leading)
-                    NightSlider(value: $fiveHourCeiling, range: 50...100, step: 5)
+                    NightSlider(value: $fiveHourCeiling, range: 50...100, step: 5,
+                                label: "5-hour stop point", valueText: "\(Int(fiveHourCeiling))% used")
                 }
             }
             HStack(spacing: Design.l) {
                 Text("Stop at \(Int(weeklyCeiling))% used")
                     .font(.caption).frame(width: 118, alignment: .leading)
-                NightSlider(value: $weeklyCeiling, range: 50...100, step: 5)
+                NightSlider(value: $weeklyCeiling, range: 50...100, step: 5,
+                            label: "Weekly stop point", valueText: "\(Int(weeklyCeiling))% used")
             }
             HStack(spacing: Design.l) {
                 Text("Resume pace \(Int(resumePaceMinutes))m")
                     .font(.caption).frame(width: 118, alignment: .leading)
-                NightSlider(value: $resumePaceMinutes, range: 5...20, step: 1)
+                NightSlider(value: $resumePaceMinutes, range: 5...20, step: 1,
+                            label: "Resume pace", valueText: "every \(Int(resumePaceMinutes)) minutes")
             }
             Text("How often the watch attempts a resume overnight. Higher spreads them out more.")
                 .font(.caption).foregroundStyle(.secondary)

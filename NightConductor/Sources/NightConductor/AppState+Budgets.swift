@@ -56,3 +56,12 @@ extension AppState {
         }
     }
 }
+
+extension AppState {
+    /// Wipe what the app remembers about past nights, on disk and in memory.
+    func clearLocalHistory() {
+        LocalHistory.clearAll()
+        sampleLog = UsageSampleLog()
+        objectWillChange.send()
+    }
+}

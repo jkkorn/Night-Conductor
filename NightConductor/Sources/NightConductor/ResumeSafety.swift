@@ -36,6 +36,22 @@ enum ResumeSafety {
         cwd.replacingOccurrences(of: "[^A-Za-z0-9]", with: "-", options: .regularExpression) == projectDir
     }
 
+    /// Whether a session title is specific enough to find that one session by
+    /// its label in another app. "Untitled", empty and very short titles
+    /// match too many things, so automation must not click on them.
+    static func isDistinctiveTitle(_ title: String) -> Bool {
+        let t = title.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let generic: Set<String> = ["untitled", "new chat", "new session", "new conversation"]
+        return t.count >= 6 && !generic.contains(t)
+    }
+
+    /// A single file name another app wrote that we'll use to build a path:
+    /// letters, digits, "-" and "_" only, so "../" can't walk out.
+    static func isSafePathComponent(_ name: String) -> Bool {
+        !name.isEmpty && name.count <= 128
+            && name.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }
+    }
+
     /// Both checks a resume must pass before any process is started.
     static func allowsHeadlessResume(_ session: StalledSession) -> Bool {
         isValidSessionID(session.claudeSessionID) && isSafeWorkspace(session.workspacePath)

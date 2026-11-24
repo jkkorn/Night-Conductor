@@ -172,14 +172,10 @@ struct BudgetsSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Design.m) {
-            VStack(alignment: .leading, spacing: Design.xs) {
-                Text("Your usage").font(.headline)
-                Text(UsageSummary.headline(rows))
-                    .font(.callout).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .contentTransition(.opacity)
-            }
-            ForEach(rows, id: \.usage.provider) { row in
+            Text("Your usage").font(.headline)
+            UsageSummaryBanner(rows: rows)
+                .revealOnAppear(index: 0)
+            ForEach(Array(rows.enumerated()), id: \.element.usage.provider) { index, row in
                 let status = PaceStatus.of(row.usage, row.assessment)
                 let needsAttention = UsageSummary.urgency(status) >= 2 || status.isInformational
                     || UsageSummary.suggestsFreeReset(row.usage)
@@ -187,8 +183,10 @@ struct BudgetsSection: View {
                     ProviderBudgetRow(usage: row.usage, assessment: row.assessment,
                                       extras: row.usage.provider == .claude ? claudeExtras : [],
                                       onCollapse: needsAttention ? nil : { toggle(row.usage.provider) })
+                        .revealOnAppear(index: index + 1)
                 } else {
                     CompactBudgetRow(usage: row.usage) { toggle(row.usage.provider) }
+                        .revealOnAppear(index: index + 1)
                 }
             }
             if !state.otherAITools.isEmpty {
@@ -224,38 +222,6 @@ extension PaceStatus {
     }
 }
 
-/// One line for an account that's fine: icon, name, plan, % used, bar.
-struct CompactBudgetRow: View {
-    let usage: ProviderUsage
-    let onOpen: () -> Void
-
-    var body: some View {
-        Button(action: onOpen) {
-            VStack(alignment: .leading, spacing: Design.s) {
-                HStack(spacing: Design.m) {
-                    ProviderIcon(provider: usage.provider, size: 20)
-                    Text(usage.provider.displayName).font(.body).bold()
-                    if let plan = usage.plan {
-                        Text(plan).font(.callout).foregroundStyle(.secondary).lineLimit(1)
-                    }
-                    Spacer(minLength: Design.s)
-                    Text(UsageWording.used(usage.weekly.utilization))
-                        .font(.callout.monospacedDigit()).foregroundStyle(.secondary)
-                    Image(systemName: "chevron.right")
-                        .font(.caption).foregroundStyle(.tertiary)
-                }
-                BudgetBar(value: usage.weekly.utilization, tint: ProviderBrand.accent(usage.provider), height: 4)
-            }
-            .padding(.horizontal, Design.l).padding(.vertical, Design.m)
-            .background(.white.opacity(0.05), in: .rect(cornerRadius: Design.cardRadius))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("\(usage.provider.displayName): \(UsageWording.used(usage.weekly.utilization)) this week, on track")
-        .accessibilityHint("Shows details")
-    }
-}
-
 /// Laid out like Claude's own usage page: who and which plan, one sentence
 /// on where the week is heading, then "This week · X% used", the bar and
 /// when it resets.
@@ -267,6 +233,8 @@ struct ProviderBudgetRow: View {
     var now = Date()
 
     private var status: PaceStatus { .of(usage, assessment, now: now) }
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isStillRender) private var isStillRender
     private var pct: Double { usage.weekly.utilization }
     private var barTint: Color { status.warningTint ?? ProviderBrand.accent(usage.provider) }
     private var isStale: Bool { if case .stale = status { return true } else { return false } }
@@ -295,7 +263,12 @@ struct ProviderBudgetRow: View {
                 Text(status.sentence(usage: usage, assessment: assessment, now: now))
                     .fixedSize(horizontal: false, vertical: true)
             } icon: {
-                Image(systemName: status.symbol).foregroundStyle(status.warningTint ?? .secondary)
+                Image(systemName: status.symbol)
+                    .foregroundStyle(status.warningTint ?? .secondary)
+                    // The one ambient motion in the app, and only while you're
+                    // burning fast: a slow pulse that asks for attention.
+                    .symbolEffect(.pulse, options: .repeating,
+                                  isActive: status == .burningHot && !reduceMotion && !isStillRender)
             }
             .font(.callout)
 
@@ -316,7 +289,7 @@ struct ProviderBudgetRow: View {
                 .help("Claude's free resets live on claude.ai. Night Conductor can't see or use them for you.")
             }
         }
-        .glassCard()
+        .glassCard(tint: status.warningTint)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilitySummary)
     }
@@ -349,39 +322,14 @@ private struct LimitRow: View {
             HStack(alignment: .firstTextBaseline) {
                 Text(title).font(height > 5 ? .subheadline : .caption)
                 Spacer()
-                Text(UsageWording.used(window.utilization))
-                    .font((height > 5 ? Font.subheadline : .caption).monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .contentTransition(.numericText())
+                UsedFigure(percent: window.utilization, font: height > 5 ? .title3 : .callout)
             }
-            BudgetBar(value: window.utilization, tint: tint, height: height)
+            GlowBar(value: window.utilization, tint: tint, height: height)
             if showsReset, let resets = window.resetsAt {
                 Text("Resets \(resets.formatted(.dateTime.weekday(.wide).hour().minute()))")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
-    }
-}
-
-/// A plain usage bar: how much of this window is used.
-struct BudgetBar: View {
-    let value: Double
-    var tint: Color = .accentColor
-    var height: CGFloat = 6
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                Capsule().fill(.quaternary)
-                Capsule()
-                    .fill(tint.gradient)
-                    .frame(width: max(height, geo.size.width * min(max(value, 0), 100) / 100))
-                    .animation(reduceMotion ? nil : .spring(response: 0.6, dampingFraction: 0.85), value: value)
-            }
-        }
-        .frame(height: height)
-        .accessibilityHidden(true)
     }
 }
 

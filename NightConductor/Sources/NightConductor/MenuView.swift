@@ -63,6 +63,11 @@ struct MenuView: View {
         .padding(Design.l)
         .frame(width: 340)
         .background(PopoverBackdrop().ignoresSafeArea())
+        // The popover paints its own night backdrop, so its text, materials
+        // and AppKit controls must be dark too, whatever the system setting.
+        // Without this, Light mode drew black text on the near-black backdrop.
+        .environment(\.colorScheme, .dark)
+        .preferredColorScheme(.dark)
         // Opening the popover is an explicit "show me now". If the cached
         // reading is stale, force a refresh (which also punches through a 429
         // backoff); if it's already fresh, stay throttled to avoid hammering.
@@ -275,7 +280,7 @@ struct MenuView: View {
             Text(state.decision?.reason ?? "Waiting for first check…")
                 .font(.callout)
                 .foregroundStyle(.primary.opacity(0.9))
-                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)   // wrap, never cut off
                 .contentTransition(.opacity)
         }
         .glassCard(tint: decisionColor)

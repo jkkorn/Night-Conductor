@@ -6,13 +6,16 @@ import SwiftUI
 /// Uses representative demo data so real session titles never ship.
 @MainActor
 enum Screenshotter {
-    static func render(to path: String, showSettings: Bool, state stateName: String = "default", hour: Double = 23) {
+    /// `light` renders the way a Mac in Light mode sees the popover, so a
+    /// dark-only assumption can't hide behind dark-only docs.
+    static func render(to path: String, showSettings: Bool, state stateName: String = "default",
+                       hour: Double = 23, light: Bool = false) {
         // ImageRenderer can't draw NSView-backed controls (Toggle, Stepper,
         // Slider), so render in a real off-to-the-side window and snapshot
         // the view hierarchy instead — that draws everything.
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
-        app.appearance = NSAppearance(named: .darkAqua)
+        app.appearance = NSAppearance(named: light ? .aqua : .darkAqua)
         app.finishLaunching()
 
         NightSkyView.hourOverride = hour // docs default to night (23)
@@ -26,8 +29,7 @@ enum Screenshotter {
             .environmentObject(state)
             .frame(width: 340)
             .fixedSize(horizontal: false, vertical: true)
-            .background(Color(red: 0.12, green: 0.12, blue: 0.14))
-            .environment(\.colorScheme, .dark)
+            .environment(\.colorScheme, light ? .light : .dark)
             .environment(\.isStillRender, true)
         renderHosting(AnyView(root), to: path)
     }

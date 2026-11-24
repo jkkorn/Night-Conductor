@@ -22,7 +22,8 @@ enum Main {
                     to: args[flagIndex + 1],
                     showSettings: args.contains("--settings"),
                     state: stateName,
-                    hour: hour
+                    hour: hour,
+                    light: args.contains("--light")
                 )
             }
             return

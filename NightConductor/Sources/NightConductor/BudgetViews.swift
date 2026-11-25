@@ -273,7 +273,8 @@ struct ProviderBudgetRow: View {
             .font(.callout)
 
             Group {
-                LimitRow(title: "This week", window: usage.weekly, tint: barTint, height: 6, showsReset: true)
+                LimitRow(title: "This week", window: usage.weekly, tint: barTint, height: 6, showsReset: true,
+                         isUnknown: usage.isResetSinceReading)
                 ForEach(extras, id: \.0) { name, window in
                     LimitRow(title: name, window: window, tint: ProviderBrand.accent(usage.provider), height: 4,
                              showsReset: UsageSummary.showsOwnReset(window.resetsAt, weekly: usage.weekly.resetsAt))
@@ -300,7 +301,8 @@ struct ProviderBudgetRow: View {
     }
 
     private var accessibilitySummary: String {
-        var text = "\(usage.provider.displayName): \(UsageWording.used(pct)) this week. "
+        let amount = usage.isResetSinceReading ? "no reading yet" : UsageWording.used(pct)
+        var text = "\(usage.provider.displayName): \(amount) this week. "
             + status.sentence(usage: usage, assessment: assessment, now: now)
         if let resets = usage.weekly.resetsAt {
             text += " Resets \(resets.formatted(.dateTime.weekday(.wide).hour().minute()))."
@@ -316,16 +318,27 @@ private struct LimitRow: View {
     let tint: Color
     var height: CGFloat
     var showsReset: Bool = true
+    /// The window reset after the last reading, so today's usage isn't
+    /// known. Say so, rather than presenting an assumed 0% as a fact.
+    var isUnknown: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Design.s) {
             HStack(alignment: .firstTextBaseline) {
                 Text(title).font(height > 5 ? .subheadline : .caption)
                 Spacer()
-                UsedFigure(percent: window.utilization, font: height > 5 ? .title3 : .callout)
+                if isUnknown {
+                    Text("No reading yet").font(.callout).foregroundStyle(.secondary)
+                } else {
+                    UsedFigure(percent: window.utilization, font: height > 5 ? .title3 : .callout)
+                }
             }
-            GlowBar(value: window.utilization, tint: tint, height: height)
-            if showsReset, let resets = window.resetsAt {
+            if isUnknown {
+                Capsule().fill(.quaternary).frame(height: height)   // the empty track, nothing to fill
+            } else {
+                GlowBar(value: window.utilization, tint: tint, height: height)
+            }
+            if showsReset, !isUnknown, let resets = window.resetsAt {
                 Text("Resets \(resets.formatted(.dateTime.weekday(.wide).hour().minute()))")
                     .font(.caption).foregroundStyle(.secondary)
             }

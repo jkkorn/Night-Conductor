@@ -139,7 +139,13 @@ enum Screenshotter {
         let grok = ProviderUsage(provider: .grok, source: "Grok Bot", plan: "Grok Bot Plan",
                                  weekly: UsageWindow(utilization: 52, resetsAt: now.addingTimeInterval(1.8 * 86_400)),
                                  readAt: now.addingTimeInterval(-2 * 86_400))
-        state.providers = [claude, chatgpt, grok]
+        // "reset": the Codex reading predates its weekly reset (the case a
+        // real Mac hit when Codex hadn't run since the reset).
+        state.providers = name == "reset"
+            ? [claude, ProviderUsage(provider: .chatgpt, source: "Codex", plan: "Pro",
+                                     weekly: UsageWindow(utilization: 94, resetsAt: now.addingTimeInterval(-4 * 86_400)),
+                                     readAt: now.addingTimeInterval(-5 * 86_400)).normalized(now: now), grok]
+            : [claude, chatgpt, grok]
         state.assessments = [
             .claude: BurnAssessment(evenPacePercent: 77, runsOutAt: nil, recentRate: name == "high" ? 9 : 2, usualRate: 3,
                                     isBurningHot: name == "high"),

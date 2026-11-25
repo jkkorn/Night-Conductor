@@ -25,26 +25,43 @@ enum ConductorDB {
     /// Don't resurrect sessions abandoned at a limit ages ago.
     static let maxStallAge: TimeInterval = 48 * 3600
 
+    /// The last `result` of each recently active, non-working session in a
+    /// live workspace, kept only when it was a usage-limit error.
+    ///
+    /// Conductor's database grows without bound (5 GB and a million messages
+    /// on a real Mac), and nothing indexes messages by time. The old query
+    /// ranked every message ever written, reading all their text: 85 seconds
+    /// per run, started every 30 seconds. This one:
+    /// - only looks at sessions touched since the cutoff (`?1`, the oldest
+    ///   stall we'd still resume; older ones were discarded anyway), and
+    /// - in each, only the newest 40 messages, found through the session
+    ///   index by insertion order, before reading any message text.
+    /// A stall's result is one of its last messages, so nothing real is lost.
     private static let lastResultQuery = """
-    WITH results AS (
-        SELECT session_id, content, created_at,
-               ROW_NUMBER() OVER (
-                   PARTITION BY session_id ORDER BY created_at DESC, id DESC
-               ) AS rn
-        FROM session_messages
-        WHERE json_valid(content)
-          AND json_extract(content, '$.type') = 'result'
+    WITH candidates AS (
+        SELECT s.id, s.claude_session_id, s.title, w.workspace_path
+        FROM sessions s
+        JOIN workspaces w ON w.id = s.workspace_id
+        WHERE w.state != 'archived'
+          AND s.status != 'working'
+          AND julianday(s.updated_at) >= julianday(?1)
     )
-    SELECT s.id, s.claude_session_id, s.title, w.workspace_path,
-           r.content, r.created_at
-    FROM results r
-    JOIN sessions s ON s.id = r.session_id
-    JOIN workspaces w ON w.id = s.workspace_id
-    WHERE r.rn = 1
-      AND w.state != 'archived'
-      AND s.status != 'working'
-      AND json_extract(r.content, '$.is_error') = 1
-      AND json_extract(r.content, '$.api_error_status') = 429
+    SELECT c.id, c.claude_session_id, c.title, c.workspace_path,
+           m.content, m.created_at
+    FROM candidates c
+    JOIN session_messages m ON m.rowid = (
+        SELECT r.rowid FROM session_messages r
+        WHERE r.rowid IN (
+            SELECT rowid FROM session_messages
+            WHERE session_id = c.id
+            ORDER BY rowid DESC LIMIT 40
+        )
+          AND json_valid(r.content)
+          AND json_extract(r.content, '$.type') = 'result'
+        ORDER BY r.rowid DESC LIMIT 1
+    )
+    WHERE json_extract(m.content, '$.is_error') = 1
+      AND json_extract(m.content, '$.api_error_status') = 429
     """
 
     /// Current status of a session ('working', 'idle', 'error', …).
@@ -71,7 +88,7 @@ enum ConductorDB {
     }
 
     static func findStalledSessions(
-        dbPath: String = defaultPath, now: Date = Date()
+        dbPath: String = defaultPath, now: Date = Date(), home: String = NSHomeDirectory()
     ) throws -> [StalledSession] {
         guard FileManager.default.fileExists(atPath: dbPath) else {
             throw ConductorDBError.notFound(dbPath)
@@ -87,17 +104,19 @@ enum ConductorDB {
             throw ConductorDBError.sqlite(String(cString: sqlite3_errmsg(db)))
         }
         defer { sqlite3_finalize(statement) }
+        let cutoff = ISO8601DateFormatter().string(from: now.addingTimeInterval(-maxStallAge))
+        sqlite3_bind_text(statement, 1, cutoff, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
 
         var sessions: [StalledSession] = []
         while sqlite3_step(statement) == SQLITE_ROW {
-            if let session = parseRow(statement, now: now) {
+            if let session = parseRow(statement, now: now, home: home) {
                 sessions.append(session)
             }
         }
         return sessions
     }
 
-    private static func parseRow(_ statement: OpaquePointer?, now: Date) -> StalledSession? {
+    private static func parseRow(_ statement: OpaquePointer?, now: Date, home: String) -> StalledSession? {
         func column(_ index: Int32) -> String? {
             guard let text = sqlite3_column_text(statement, index) else { return nil }
             return String(cString: text)
@@ -123,7 +142,7 @@ enum ConductorDB {
         else { return nil } // workspace was removed; nothing to resume into
         // Untrusted row: only a UUID session in a real project folder.
         guard ResumeSafety.isValidSessionID(claudeSessionID),
-              ResumeSafety.isSafeWorkspace(workspacePath)
+              ResumeSafety.isSafeWorkspace(workspacePath, home: home)
         else { return nil }
 
         // Fail closed: an unparseable timestamp must not bypass the

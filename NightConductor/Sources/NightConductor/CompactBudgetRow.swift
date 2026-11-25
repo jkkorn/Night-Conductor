@@ -18,6 +18,12 @@ struct CompactBudgetRow: View {
                     if let plan = usage.plan {
                         Text(plan).font(.callout).foregroundStyle(.secondary).lineLimit(1)
                     }
+                    if usage.freeResetsAvailable > 0 {
+                        Label("\(usage.freeResetsAvailable)", systemImage: "gift")
+                            .font(.callout).foregroundStyle(.secondary)
+                            .help(UsageWording.freeResets(usage.freeResetsAvailable))
+                            .accessibilityLabel(UsageWording.freeResets(usage.freeResetsAvailable))
+                    }
                     Spacer(minLength: Design.s)
                     UsedFigure(percent: usage.weekly.utilization, font: .title3)
                     Image(systemName: "chevron.right")

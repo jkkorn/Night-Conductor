@@ -5,6 +5,9 @@ import SwiftUI
 /// Claude's own usage page says it. Never "left" or a bare number.
 enum UsageWording {
     static func used(_ percent: Double) -> String { "\(Int(percent.rounded()))% used" }
+    static func freeResets(_ count: Int) -> String {
+        count == 1 ? "1 free reset available" : "\(count) free resets available"
+    }
 }
 
 /// Where a provider's week is heading, said as one plain sentence.
@@ -288,6 +291,12 @@ struct ProviderBudgetRow: View {
                         .font(.callout)
                 }
                 .help("Claude's free resets live on claude.ai. Night Conductor can't see or use them for you.")
+            }
+
+            if usage.freeResetsAvailable > 0 {
+                Label(UsageWording.freeResets(usage.freeResetsAvailable), systemImage: "gift")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .help("Granted to your account. Use them in Codex when you want; Night Conductor never spends one for you.")
             }
         }
         .glassCard(tint: status.warningTint)

@@ -12,7 +12,10 @@ extension AppState {
         if now.timeIntervalSince(lastLocalProviderRead ?? .distantPast) >= Self.localProviderInterval {
             lastLocalProviderRead = now
             let (local, others) = await Task.detached(priority: .utility) {
-                ([CodexUsageReader.read(), GrokBotUsageReader.read()].compactMap { $0 },
+                // The account first: it counts cloud runs (Conductor Build,
+                // Codex web) that never touch this Mac's Codex logs.
+                ([CodexAccountReader.cachedRead() ?? CodexUsageReader.read(),
+                  GrokBotUsageReader.read()].compactMap { $0 },
                  InstalledAITools.detectWithoutUsage())
             }.value
             cachedLocalProviders = local

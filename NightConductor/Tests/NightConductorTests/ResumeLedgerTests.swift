@@ -3,10 +3,10 @@ import XCTest
 @testable import NightConductor
 
 /// Budget-ledger tests for the C1 fix (success vs failure tracking).
-/// Night-key / immutability tests live in PolicyTests' NightLedgerTests.
-final class NightLedgerBudgetTests: XCTestCase {
+/// Day-key / immutability tests live in PolicyTests.
+final class ResumeLedgerBudgetTests: XCTestCase {
     func testSuccessSpendsBudgetFailureDoesNot() {
-        var night = NightLedger(key: "2026-06-16")
+        var night = ResumeLedger(key: "2026-06-16")
         night = night.recordingFailure("s1")
         night = night.recordingFailure("s1")
         // A pile of failures must NOT consume the per-night budget.
@@ -21,7 +21,7 @@ final class NightLedgerBudgetTests: XCTestCase {
     }
 
     func testSuccessAndFailureAreIndependentPerSession() {
-        var night = NightLedger(key: "k")
+        var night = ResumeLedger(key: "k")
         night = night.recordingSuccess("a").recordingSuccess("b").recordingFailure("c")
         XCTAssertEqual(night.total, 2)
         XCTAssertEqual(night.count(for: "a"), 1)
@@ -30,7 +30,7 @@ final class NightLedgerBudgetTests: XCTestCase {
     }
 
     func testRecordingReturnsNewValueWithoutMutating() {
-        let base = NightLedger(key: "k")
+        let base = ResumeLedger(key: "k")
         let next = base.recordingSuccess("x")
         XCTAssertEqual(base.total, 0)   // immutable: original untouched
         XCTAssertEqual(next.total, 1)
@@ -38,29 +38,31 @@ final class NightLedgerBudgetTests: XCTestCase {
 
     func testPersistsSuccessAndFailureSeparately() {
         let defaults = makeDefaults()
-        var night = NightLedger.load(startHour: 23, defaults: defaults)
+        var night = ResumeLedger.load(defaults: defaults)
         night = night.recordingSuccess("s1").recordingFailure("s2")
         night.save(defaults: defaults)
 
-        let reloaded = NightLedger(
+        let reloaded = ResumeLedger(
             key: night.key,
-            counts: defaults.dictionary(forKey: "nightCounts") as? [String: Int] ?? [:],
-            failures: defaults.dictionary(forKey: "nightFailures") as? [String: Int] ?? [:]
+            counts: defaults.dictionary(forKey: "ledgerCounts") as? [String: Int] ?? [:],
+            failures: defaults.dictionary(forKey: "ledgerFailures") as? [String: Int] ?? [:]
         )
         XCTAssertEqual(reloaded.count(for: "s1"), 1)
         XCTAssertEqual(reloaded.failureCount(for: "s2"), 1)
     }
 
-    func testLoadResetsWhenNightKeyChanges() {
+    func testNewDayResetsTheDailyTotalButNotPerStallTries() {
         let defaults = makeDefaults()
-        defaults.set("1999-01-01", forKey: "nightKey")
-        defaults.set(["old": 5], forKey: "nightCounts")
-        defaults.set(["old": 9], forKey: "nightFailures")
-        // A new night → fresh budget, prior counts ignored.
-        let night = NightLedger.load(startHour: 23, defaults: defaults)
-        XCTAssertNotEqual(night.key, "1999-01-01")
-        XCTAssertEqual(night.total, 0)
-        XCTAssertEqual(night.failureCount(for: "old"), 0)
+        defaults.set("1999-01-01", forKey: "ledgerDay")
+        defaults.set(7, forKey: "ledgerDayTotal")
+        defaults.set(["old": 5], forKey: "ledgerCounts")
+        defaults.set(["old": 9], forKey: "ledgerFailures")
+        // A new day: a fresh daily budget, but a stall that already failed
+        // its tries stays failed (it would otherwise be hammered daily).
+        let ledger = ResumeLedger.load(defaults: defaults)
+        XCTAssertNotEqual(ledger.key, "1999-01-01")
+        XCTAssertEqual(ledger.total, 0)
+        XCTAssertEqual(ledger.failureCount(for: "old"), 9)
     }
 
     // C2: the same Claude session under two source IDs shares ONE per-session
@@ -76,7 +78,7 @@ final class NightLedgerBudgetTests: XCTestCase {
             workspacePath: "/w", errorText: "limit", stalledAt: nil, source: .claudeCode)
         XCTAssertEqual(conductor.ledgerKey, terminal.ledgerKey) // same counter
 
-        var night = NightLedger(key: "k")
+        var night = ResumeLedger(key: "k")
         night = night.recordingSuccess(conductor.ledgerKey)
         night = night.recordingSuccess(terminal.ledgerKey)
         // Both resumes accumulate under one key — the per-session cap (3)
@@ -92,32 +94,18 @@ final class NightLedgerBudgetTests: XCTestCase {
         XCTAssertEqual(s.ledgerKey, "only-id")
     }
 
-    // The morning summary is edge-triggered live; a level-triggered catch-up
-    // must post it after a missed window-close (Mac asleep or app not running).
-    func testMorningCatchUpDecision() {
-        // In the window: never catch up.
-        XCTAssertFalse(AppState.morningCatchUp(
-            inWindow: true, lastSummaryNight: nil, nightKey: "2026-07-03", total: 5).mark)
-        // Out of window, unseen night, resumes happened: mark and post.
-        let fresh = AppState.morningCatchUp(
-            inWindow: false, lastSummaryNight: "2026-07-02", nightKey: "2026-07-03", total: 5)
-        XCTAssertTrue(fresh.mark)
-        XCTAssertTrue(fresh.post)
-        // Out of window, unseen night, but nothing resumed: mark it handled to
-        // stop re-checking, yet do not post an empty summary.
-        let empty = AppState.morningCatchUp(
-            inWindow: false, lastSummaryNight: nil, nightKey: "2026-07-03", total: 0)
-        XCTAssertTrue(empty.mark)
-        XCTAssertFalse(empty.post)
-        // Already summarized this night (e.g. the live path fired): do nothing.
-        let done = AppState.morningCatchUp(
-            inWindow: false, lastSummaryNight: "2026-07-03", nightKey: "2026-07-03", total: 5)
-        XCTAssertFalse(done.mark)
-        XCTAssertFalse(done.post)
+    func testResumeSummaryAccumulatesThenClearsOnce() {
+        let d = makeDefaults()
+        XCTAssertNil(ResumeSummary.takeIfAny(defaults: d))
+        ResumeSummary.recordUnattended(key: "a", title: "A", inApp: true, defaults: d)
+        ResumeSummary.recordUnattended(key: "b", title: "B", inApp: false, defaults: d)
+        XCTAssertEqual(ResumeSummary.takeIfAny(defaults: d),
+                       ResumeSummary.Pending(count: 2, title: "B", background: 1))
+        XCTAssertNil(ResumeSummary.takeIfAny(defaults: d)) // posted once, not twice
     }
 
     private func makeDefaults() -> UserDefaults {
-        let suite = "NightLedgerTests-\(UUID().uuidString)"
+        let suite = "ResumeLedgerTests-\(UUID().uuidString)"
         let d = UserDefaults(suiteName: suite)!
         d.removePersistentDomain(forName: suite)
         return d

@@ -33,7 +33,6 @@ extension Color {
 struct MenuView: View {
     @EnvironmentObject var state: AppState
     @State private var showSettings: Bool
-    @State private var showActivity: Bool
     @AppStorage("setupDismissed") private var setupDismissed = false
     // AXIsProcessTrusted() is only re-read on render, so poll while the card is
     // showing — the checkmark should flip within seconds of granting, matching
@@ -43,9 +42,8 @@ struct MenuView: View {
     @State private var notificationsAllowed = true // assume yes until checked, so the card doesn't flash
     private let maxStalledRows = 6 // render this many; the rest auto-resume
 
-    init(showSettings: Bool = false, showActivity: Bool = false) {
+    init(showSettings: Bool = false) {
         _showSettings = State(initialValue: showSettings)
-        _showActivity = State(initialValue: showActivity)
     }
 
     var body: some View {
@@ -53,9 +51,10 @@ struct MenuView: View {
             header
             setupCard
             usageSection
-            nightWatchSection
+            ResetsCard(providers: state.providers)
+                .revealOnAppear(index: 4)
+            resumeSection
                 .revealOnAppear(index: 5)
-            if showActivity { activityLog }
             Divider()
             footer
                 .revealOnAppear(index: 6)
@@ -88,12 +87,13 @@ struct MenuView: View {
         }
     }
 
-    /// The night watch, as one labelled section under your usage.
-    private var nightWatchSection: some View {
+    /// Stalled work and what happens to it at the reset.
+    private var resumeSection: some View {
         VStack(alignment: .leading, spacing: Design.m) {
-            Text("Night watch").font(.headline)
-            decisionRow
+            Text("Resume at reset").font(.headline)
+            if !state.stalled.isEmpty || !state.armed { decisionRow }
             stalledSection
+            lastResumeLine
         }
     }
 
@@ -128,7 +128,7 @@ struct MenuView: View {
                 Spacer()
                 GlowingMoon(armed: state.armed, size: 24)
                 VStack(alignment: .trailing, spacing: Design.xs) {
-                    Toggle("Arm night watch", isOn: Binding(
+                    Toggle("Auto-resume at reset", isOn: Binding(
                         get: { state.armed },
                         // Set directly, no wrapping spring: the old spring animated the
                         // whole armed-driven header (mesh sky + moon shadows) for 0.35s
@@ -140,8 +140,8 @@ struct MenuView: View {
                     .toggleStyle(.switch)
                     .controlSize(.small)
                     .tint(.green)
-                    .help("Arm or disarm the night watch")
-                    Text(state.armed ? "ARMED" : "PAUSED")
+                    .help("Resume stalled sessions automatically when your week has room again")
+                    Text(state.armed ? "ON" : "PAUSED")
                         .font(.caption.weight(.bold))
                         .foregroundStyle(state.armed ? Color.green : .white.opacity(0.6))
                         .contentTransition(.numericText())
@@ -219,7 +219,7 @@ struct MenuView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             VStack(alignment: .leading, spacing: Design.s) {
-                setupStep(done: armed, "Night watch armed")
+                setupStep(done: armed, "Auto-resume at reset on")
                 setupStep(done: launchAtLogin, "Launches at login")
                 setupStep(done: usageReady, "Reading your usage")
                 setupStep(done: notifications, pending: !notifications,
@@ -259,14 +259,18 @@ struct MenuView: View {
         }
     }
 
+    /// The next thing that comes back, the one fact worth a glance.
     private var subtitle: String {
-        if let resuming = state.currentlyResuming { return "Conducting: \(resuming)…" }
+        if let resuming = state.currentlyResuming { return "Resuming: \(resuming)…" }
         if state.isWorking { return "Checking…" }
-        guard state.armed else { return "Night watch paused" }
-        let config = PolicyConfig.fromDefaults()
-        let watchingNow = state.aroundTheClock || Policy.inActiveHours(
-            hour: Calendar.current.component(.hour, from: Date()), start: config.startHour, end: config.endHour)
-        return watchingNow ? "Watching while you sleep" : "Armed for tonight"
+        let next = state.providers
+            .compactMap { p in p.weekly.resetsAt.map { (p, $0) } }
+            .filter { $0.1 > Date() }
+            .min { $0.1 < $1.1 }
+        guard let (provider, date) = next else {
+            return state.armed ? "Resumes stalled work at your reset" : "Auto-resume paused"
+        }
+        return "\(provider.provider.displayName) resets \(ResetWatch.countdown(to: date, now: Date()))"
     }
 
     /// Every AI subscription we can read, one card each (BudgetViews.swift).
@@ -277,7 +281,8 @@ struct MenuView: View {
             Image(systemName: decisionIcon)
                 .foregroundStyle(decisionColor)
                 .contentTransition(.symbolEffect(.replace))
-            Text(state.decision?.reason ?? "Waiting for first check…")
+            Text(state.armed ? (state.decision?.reason ?? "Waiting for first check…")
+                             : "Auto-resume is paused. Stalled sessions stay put until you resume them.")
                 .font(.callout)
                 .foregroundStyle(.primary.opacity(0.9))
                 .fixedSize(horizontal: false, vertical: true)   // wrap, never cut off
@@ -290,7 +295,7 @@ struct MenuView: View {
     private var decisionColor: Color {
         switch state.decision?.state {
         case .resuming: return .green
-        case .standingBy: return .indigo   // calm & nocturnal — not a warning
+        case .waitingForReset: return .indigo   // calm: the reset is the plan, not a warning
         case .holding: return .orange
         case .checking, .none: return .secondary
         }
@@ -299,7 +304,7 @@ struct MenuView: View {
     private var decisionIcon: String {
         switch state.decision?.state {
         case .resuming: return "checkmark.circle.fill"
-        case .standingBy: return "moon.stars.fill" // resting; wakes for the night
+        case .waitingForReset: return "moon.stars.fill" // resting until the week comes back
         case .holding: return "pause.circle.fill"
         case .checking, .none: return "clock"
         }
@@ -308,10 +313,11 @@ struct MenuView: View {
     @ViewBuilder
     private var stalledSection: some View {
         if state.stalled.isEmpty {
-            HStack(spacing: Design.m) {
+            HStack(alignment: .firstTextBaseline, spacing: Design.m) {
                 Image(systemName: "moon.zzz.fill").foregroundStyle(.secondary)
-                Text("No stalled sessions, all quiet")
+                Text("Nothing stalled. If a session hits the limit, it picks back up when the week has room again.")
                     .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.vertical, Design.s)
         } else {
@@ -330,7 +336,7 @@ struct MenuView: View {
                     stalledRow(session)
                 }
                 if state.stalled.count > maxStalledRows {
-                    Text("+ \(state.stalled.count - maxStalledRows) more, pin the ones you want resumed by day")
+                    Text("+ \(state.stalled.count - maxStalledRows) more, resumed in turn")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .padding(.leading, 2)
@@ -344,7 +350,7 @@ struct MenuView: View {
                 }
                 .buttonStyle(GlowButtonStyle(disabled: state.isWorking))
                 .disabled(state.isWorking)
-                .help("Resumes now, bypasses the schedule and budget gates")
+                .help("Resumes everything now, ignoring your stop line. Only the real limit can stop it.")
             }
         }
     }
@@ -352,7 +358,6 @@ struct MenuView: View {
     @ViewBuilder
     private func stalledRow(_ session: StalledSession) -> some View {
         let accent: Color = session.kind == .transient ? .yellow : .orange
-        let pinned = state.isPinned(session)
         HStack(spacing: Design.m) {
             Image(systemName: session.kind.icon)
                 .font(.title3)
@@ -375,117 +380,30 @@ struct MenuView: View {
                 }
             }
             Spacer()
-            // Pin = auto-resume this session around the clock (not just at night).
-            Button(pinned ? "Stop auto-resuming any time" : "Auto-resume any time",
-                   systemImage: pinned ? "repeat.circle.fill" : "repeat.circle") {
-                state.togglePin(session)
-            }
-            .labelStyle(.iconOnly)
-            .font(.title3)
-            .foregroundStyle(pinned ? Color.indigo : .secondary)
-            .buttonStyle(.plain)
-            .accessibilityAddTraits(pinned ? .isSelected : [])
-            .help(pinned
-                  ? "Auto-resuming any time, click to stop"
-                  : "Auto-resume this session any time (not just at night)")
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())
         .hoverLift()
     }
 
-    // The Activity panel shows the DURABLE resume history (what was resumed and
-    // when), read from the same persisted store as the weekly stat. It used to
-    // render only `state.activity` — the in-memory session log, which is empty
-    // on every launch, so it looked blank even after the watch resumed all
-    // night. The live session log is kept below as a dim, secondary trace.
-    private var activityLog: some View {
-        let resumes = ResumeHistory.recent(limit: 40)
-        return ScrollView {
-            VStack(alignment: .leading, spacing: Design.m) {
-                watchProof
-                VStack(alignment: .leading, spacing: 4) {
-                    activitySectionLabel("Recent resumes")
-                    if resumes.isEmpty {
-                        Text("Nothing resumed yet. Sessions you leave stalled on the limit show up here once the watch picks them back up.")
-                            .font(.caption).foregroundStyle(.tertiary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    } else {
-                        ForEach(Array(resumes.enumerated()), id: \.offset) { _, event in
-                            ActivityRow(event: event)
-                        }
-                    }
-                }
-                if !state.activity.isEmpty {
-                    VStack(alignment: .leading, spacing: 3) {
-                        activitySectionLabel("This session")
-                        ForEach(state.activity.prefix(12), id: \.self) { line in
-                            Text(line).font(.caption.monospaced())
-                                .foregroundStyle(.tertiary).lineLimit(1)
-                        }
-                    }
-                }
+    /// One line of proof that the loop works, from the durable history:
+    /// the last resume and whether it landed in the app's chat. Plus, while
+    /// it's true, that the Mac is being held awake for a reset.
+    @ViewBuilder
+    private var lastResumeLine: some View {
+        let last = ResumeHistory.recent(limit: 1).first
+        VStack(alignment: .leading, spacing: Design.xs) {
+            if PowerManager.isHoldingAwake {
+                Label("Keeping your Mac awake for the reset", systemImage: "bolt.horizontal.fill")
+                    .font(.caption).foregroundStyle(.indigo)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .frame(maxHeight: 180)
-    }
-
-    private func activitySectionLabel(_ text: String) -> some View {
-        Text(text.uppercased())
-            .font(.caption).bold()
-            .tracking(0.6)
-            .foregroundStyle(.tertiary)
-    }
-
-    /// Visible proof the watch is real: whether it's holding the Mac awake right
-    /// now, and how long it kept it awake plus how many sessions it resumed in
-    /// the last 24 hours. Reads durable stores, so it survives relaunches.
-    private var watchProof: some View {
-        let holding = PowerManager.isHoldingAwake
-        let since = Date().addingTimeInterval(-24 * 3600)
-        let awake = PowerLog.awakeSeconds(since: since)
-        let resumes = ResumeHistory.count(within: 24 * 3600)
-        let background = ResumeHistory.backgroundCount(within: 24 * 3600)
-        let longestHold = HoldLog.longestHold(since: since)
-        return VStack(alignment: .leading, spacing: 4) {
-            activitySectionLabel("Last 24 hours")
-            HStack(spacing: Design.s) {
-                Image(systemName: holding ? "bolt.horizontal.fill" : "pause.circle")
-                    .font(.caption)
-                    .foregroundStyle(holding ? Color.indigo : Color.secondary)
-                Text(holding ? "Keeping your Mac awake now"
-                             : "Not holding the Mac awake right now")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Text("Kept awake \(awakeText(awake)) and resumed \(resumes) session\(resumes == 1 ? "" : "s").")
-                .font(.caption).foregroundStyle(.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
-            if background > 0 {
-                Text("Background resumes land in your workspace, not the chat.")
+            if let last {
+                Text("Last resumed: \(last.title), \(ActivityStamp.stamp(last.date))"
+                     + (last.inConductor ? "" : " (in the background, check the workspace)"))
                     .font(.caption).foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            // Only shown when something actually blocked resuming — silent on
-            // a normal night, so this reads as a real answer to "why didn't it
-            // resume anything," not routine noise.
-            if let hold = longestHold, hold.seconds >= 60 {
-                HStack(alignment: .top, spacing: Design.s) {
-                    Image(systemName: "exclamationmark.circle")
-                        .font(.caption).foregroundStyle(.orange)
-                    Text("Held \(awakeText(hold.seconds)): \(hold.reason)")
-                        .font(.caption).foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                    .lineLimit(2)
             }
         }
-    }
-
-    private func awakeText(_ seconds: TimeInterval) -> String {
-        let minutes = Int(seconds) / 60
-        guard minutes >= 1 else { return "under a minute" }
-        let hours = minutes / 60, rem = minutes % 60
-        return hours > 0 ? "\(hours)h \(rem)m" : "\(rem)m"
     }
 
     private var footer: some View {
@@ -498,10 +416,6 @@ struct MenuView: View {
                     showSettings.toggle()
                 }
                 .accessibilityIdentifier("settingsButton")
-                ToolbarTextButton(systemName: "list.bullet.rectangle", label: "Activity", isOn: showActivity) {
-                    showActivity.toggle()
-                }
-                .accessibilityIdentifier("activityButton")
 
                 Spacer()
                 if let tick = state.lastTick {
@@ -519,38 +433,8 @@ struct MenuView: View {
     }
 }
 
-/// One row in the Activity panel: the brand moon (the night watch did this),
-/// the session title, an "in app" tag when the resume landed inside Conductor
-/// or the Claude app (so the chat stayed in sync), and a day-aware timestamp.
-private struct ActivityRow: View {
-    let event: ResumeEvent
-
-    var body: some View {
-        HStack(spacing: Design.m) {
-            Image(systemName: "moon.fill")
-                .font(.caption)
-                .foregroundStyle(Color.indigo)
-                .accessibilityHidden(true)
-            Text(event.title)
-                .font(.caption)
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Spacer(minLength: Design.s)
-            if event.inConductor {
-                Text("in app")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            }
-            Text(Self.stamp(event.date))
-                .font(.caption.monospaced())
-                .foregroundStyle(.secondary)
-                .layoutPriority(1)
-        }
-    }
-
-    /// Day-aware so each row stays one line and is unambiguous across nights:
-    /// just the time for today, weekday + time within the past week, otherwise
-    /// a short date.
+/// Day-aware timestamps for the last-resume line: "14:05", "Thu 23:10".
+enum ActivityStamp {
     static func stamp(_ date: Date, now: Date = Date()) -> String {
         let cal = Calendar.current
         if cal.isDateInToday(date) {
@@ -563,8 +447,6 @@ private struct ActivityRow: View {
     }
 }
 
-/// A footer button with its name visible, so nobody has to guess which icon
-/// is Settings. Highlighted while its panel is open.
 struct ToolbarTextButton: View {
     let systemName: String
     let label: String
@@ -685,92 +567,44 @@ struct SettingsPane: View {
     @EnvironmentObject var state: AppState
     @State private var checkingUpdate = false
     @State private var checkedUpToDate = false
-    @AppStorage("startHour") private var startHour = 23
-    @AppStorage("endHour") private var endHour = 7
-    @AppStorage("fiveHourCeiling") private var fiveHourCeiling = 85.0
     @AppStorage("weeklyCeiling") private var weeklyCeiling = 90.0
-    @AppStorage("resumePaceMinutes") private var resumePaceMinutes = 10.0
-    @AppStorage("aroundTheClock") private var aroundTheClock = false
     @AppStorage("uiResume") private var uiResume = true
     @AppStorage("menuBarUsage") private var menuBarUsage = true
     @AppStorage(AlertSettings.burnHotKey) private var alertBurnHot = true
     @AppStorage(AlertSettings.runOutKey) private var alertRunOut = true
+    @AppStorage(AlertSettings.weekResetKey) private var alertWeekReset = true
     @AppStorage(AlertSettings.sensitivityKey) private var alertSensitivity = BurnSensitivity.balanced.rawValue
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
-    @State private var wakeScheduled = PowerManager.currentWakeSchedule() != nil
+    @State private var wakeSpec = PowerManager.scheduledSpec
+    /// Repeating power events already on the Mac that aren't ours (read once
+    /// when settings opens), so scheduling never silently replaces them.
+    @State private var otherRepeating: [String] =
+        PowerManager.scheduledSpec == nil && Bundle.main.bundleURL.pathExtension == "app"
+            ? PowerManager.repeatingEvents() : []
     // AXIsProcessTrusted() is only re-read on render, so poll while the
-    // pane is open — the warning clears within seconds of granting.
+    // pane is open: the warning clears within seconds of granting.
     @State private var hasAccessibility = UIResumer.hasAccessibilityPermission
     private let permissionTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
-    /// Claude and ChatGPT retired the 5-hour window; its controls only make
-    /// sense on a plan that still reports one.
-    private var hasFiveHourWindow: Bool { state.usage?.fiveHour != nil }
+    /// The wake that matches Claude's current reset, if we know the reset.
+    private var currentResetSpec: ResetWatch.WakeSpec? {
+        state.usage?.sevenDay.resetsAt.flatMap { ResetWatch.wakeSpec(for: $0) }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Design.m) {
-            HStack {
-                Text("Watch from").font(.caption)
-                HourStepper(hour: $startHour, label: "Watch from")
-                Spacer()
-                Text("I'm back at").font(.caption)
-                HourStepper(hour: $endHour, label: "I'm back at")
-            }
-            if hasFiveHourWindow {
-                Text("Nothing starts after \(((endHour - 5) + 24) % 24):00, so your 5-hour window is fresh when you sit down.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            Toggle("Resume around the clock", isOn: $aroundTheClock)
-                .font(.caption)
-                .toggleStyle(.checkbox)
-            Text("Resumes whenever there's budget, not just at night, and keeps your Mac awake so it's ready the moment your limit resets. Best when you're plugged in. Ignores the hours above.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            HStack {
-                Text("Nightly wake").font(.caption)
-                Spacer()
-                if wakeScheduled {
-                    Label("scheduled", systemImage: "checkmark.circle.fill")
-                        .font(.caption).foregroundStyle(.green)
-                    Button("Remove") {
-                        if PowerManager.cancelNightlyWake() { wakeScheduled = false }
-                    }.controlSize(.small)
-                } else {
-                    Button("Wake at \(startHour):00…") {
-                        if PowerManager.scheduleNightlyWake(hour: startHour) { wakeScheduled = true }
-                    }.controlSize(.small)
-                }
-            }
-            Text("Night Conductor keeps your Mac awake during the watch by itself. Schedule a wake only if your Mac fully sleeps before then (asks for your password once). It can wake your Mac from sleep, but it cannot turn on a Mac that is shut down.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            if hasFiveHourWindow {
-                HStack(spacing: Design.l) {
-                    Text("5h: stop at \(Int(fiveHourCeiling))% used")
-                        .font(.caption).frame(width: 118, alignment: .leading)
-                    NightSlider(value: $fiveHourCeiling, range: 50...100, step: 5,
-                                label: "5-hour stop point", valueText: "\(Int(fiveHourCeiling))% used")
-                }
-            }
+            Text("Resume at reset").font(.caption).bold()
             HStack(spacing: Design.l) {
                 Text("Stop at \(Int(weeklyCeiling))% used")
                     .font(.caption).frame(width: 118, alignment: .leading)
                 NightSlider(value: $weeklyCeiling, range: 50...100, step: 5,
                             label: "Weekly stop point", valueText: "\(Int(weeklyCeiling))% used")
             }
-            HStack(spacing: Design.l) {
-                Text("Resume pace \(Int(resumePaceMinutes))m")
-                    .font(.caption).frame(width: 118, alignment: .leading)
-                NightSlider(value: $resumePaceMinutes, range: 5...20, step: 1,
-                            label: "Resume pace", valueText: "every \(Int(resumePaceMinutes)) minutes")
-            }
-            Text("How often the watch attempts a resume overnight. Higher spreads them out more.")
+            Text("Unattended resumes stop here, and never run ahead of the week, so the last \(100 - Int(weeklyCeiling))% stays yours. Resume now ignores this.")
                 .font(.caption).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            resetWakeRow
+            Divider()
             Toggle("Show Claude usage in menu bar", isOn: $menuBarUsage)
                 .font(.caption)
                 .toggleStyle(.checkbox)
@@ -793,7 +627,10 @@ struct SettingsPane: View {
             Toggle("Warn me if I'll run out before a reset", isOn: $alertRunOut)
                 .font(.caption)
                 .toggleStyle(.checkbox)
-            Text("Covers every budget above. Each warning is sent once, then stays quiet: run-out once per week, burning fast at most every 3 hours.")
+            Toggle("Tell me when a week resets", isOn: $alertWeekReset)
+                .font(.caption)
+                .toggleStyle(.checkbox)
+            Text("Covers every account above. Each alert is sent once: run-out and reset once per week, burning fast at most every 3 hours.")
                 .font(.caption).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Toggle("Launch at login", isOn: $launchAtLogin)
@@ -870,5 +707,53 @@ struct SettingsPane: View {
         .onReceive(permissionTimer) { _ in
             hasAccessibility = UIResumer.hasAccessibilityPermission
         }
+    }
+
+    /// Optional weekly firmware wake a few minutes before Claude's reset, for a
+    /// Mac that's asleep then. Honest about drift: a free reset moves the week,
+    /// and then the old wake no longer matches.
+    @ViewBuilder
+    private var resetWakeRow: some View {
+        HStack {
+            Text("Wake for Claude's reset").font(.caption)
+            Spacer()
+            if let wakeSpec {
+                if let current = currentResetSpec, current != wakeSpec {
+                    Button("Update…") { schedule(current) }.controlSize(.small)
+                } else {
+                    Label("scheduled", systemImage: "checkmark.circle.fill")
+                        .font(.caption).foregroundStyle(.green)
+                }
+                Button("Remove") {
+                    if PowerManager.cancelScheduledWake() { self.wakeSpec = nil }
+                }.controlSize(.small)
+            } else if let current = currentResetSpec {
+                Button("Schedule…") { schedule(current) }.controlSize(.small)
+            } else {
+                Text("Waiting for a usage reading").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        Text(wakeExplanation)
+            .font(.caption).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var wakeExplanation: String {
+        var text = "The Mac is kept awake on its own when a reset is near and work is waiting. "
+            + "This also wakes a sleeping Mac a few minutes before Claude's reset, every week. "
+            + "macOS asks for your password each time you change it."
+        if let wakeSpec, let current = currentResetSpec, current != wakeSpec {
+            text = "Claude's reset time changed (a free reset or a clock change moves it), "
+                + "so the scheduled wake no longer matches. Update it. " + text
+        }
+        if wakeSpec == nil, !otherRepeating.isEmpty {
+            text += " Scheduling replaces the repeating power schedule already on this Mac: "
+                + otherRepeating.joined(separator: "; ") + "."
+        }
+        return text
+    }
+
+    private func schedule(_ spec: ResetWatch.WakeSpec) {
+        if PowerManager.scheduleResetWake(spec) { wakeSpec = spec }
     }
 }

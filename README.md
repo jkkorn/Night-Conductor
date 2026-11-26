@@ -5,9 +5,9 @@
 <h1 align="center">Night Conductor</h1>
 
 <p align="center">
-  <strong>Your <a href="https://conductor.build">Conductor</a> sessions hit the Claude usage limit at 11pm.<br>
-  Night Conductor finishes them while you sleep, without blowing your weekly budget.<br>
-  It also shows your weekly Claude, ChatGPT and Grok usage, and warns you before you run out.</strong>
+  <strong>Your weekly Claude, ChatGPT and Grok usage, and when each one comes back.<br>
+  When a <a href="https://conductor.build">Conductor</a> session stalls on the limit,
+  Night Conductor resumes it at the reset, whatever the hour,<br>without spending the part of the week you keep for yourself.</strong>
 </p>
 
 <p align="center">
@@ -24,19 +24,18 @@
 
 ---
 
-It's midnight. You're a few prompts deep into something good, and Claude stops:
-"You've hit your session limit, resets 1:30am." So you go to bed, and the work
-just sits there until morning.
+Claude and ChatGPT plans are weekly now. When you hit the limit, the work
+stops until the week resets, and that reset is a fixed moment: Friday at 01:59,
+say. Not "tonight". Not "in five hours".
 
-Night Conductor is a small macOS menu bar app that waits for exactly that.
-While you sleep, it spots your stalled sessions, checks your live Claude usage,
-and picks the work back up the moment your limit resets and there's budget to
-spare. It presses the session's own Retry, so the chat stays in sync. You wake
-up to finished work instead of a paused cursor.
+Night Conductor is a small macOS menu bar app built around that moment. It
+shows where each of your weeks stands and exactly when each one comes back.
+When a session stalls on the limit, it waits for the reset, then picks the
+work back up by pressing the session's own Retry, so the chat stays in sync.
 
-It is careful with your tokens on purpose. During the day you're at the helm.
-The night shift only takes over on the schedule you set, and it never spends
-past the ceilings you give it.
+It is careful with your week on purpose. Unattended resumes stop at a line you
+set (90% used by default) and never run ahead of the week, so the last part of
+it is always yours.
 
 ## It works wherever you run Claude
 
@@ -51,27 +50,42 @@ where it came from and resumed the right way for that app.
 
 If the same session shows up in more than one place, it only counts once.
 
-## How the night goes
+## How a reset goes
 
-Every few minutes inside your watch window (23:00 to 07:00 by default):
+Every few minutes, at any hour:
 
-1. **It scans.** Reads the session database (read only, it never writes back)
+1. **It scans.** Reads the session databases (read only, it never writes back)
    for anything whose last message is a `429` usage-limit error.
-2. **It checks the budget.** Asks the official usage endpoint for your live
+2. **It checks the week.** Asks the official usage endpoint for your live
    weekly numbers, the same ones `/usage` shows in Claude Code, using the
    OAuth token Claude Code already keeps in your Keychain.
 3. **It decides.** It only resumes when there's real room:
-   - this week is under your stop line (90% used by default)
-   - you aren't burning the week faster than it's passing. If you're at 70%
-     with five days left, it holds rather than make that worse overnight.
-   - on a plan that still has a 5-hour window, it also keeps that under its
-     ceiling and leaves your mornings alone, so a 6am resume can't lock you
-     out until 11am. Claude and ChatGPT plans are weekly-only now, so this
-     usually doesn't apply.
-4. **It resumes.** It presses Retry so the work continues right in the chat.
-   Resumes are spread across the night with a re-check after each one. It stops
-   at 3 retries per session and 10 resumes a night. If it can't read your
-   usage, it does nothing, because guessing is how you blow a budget.
+   - the week is under your stop line (90% used by default)
+   - you aren't spending the week faster than it's passing. At 70% with five
+     days left, it holds rather than leave you short on Thursday.
+   - at the limit, it simply waits for the reset and tells you when that is.
+4. **It resumes.** It presses Retry so the work continues right in the chat,
+   one session at a time with a re-check after each. It stops at 3 resumes per
+   session and 10 a day. If it can't read your usage, it does nothing, because
+   guessing is how you blow a budget.
+
+It keeps your Mac awake only when stalled work is waiting and the reset is
+less than 30 minutes away (or resuming is already possible). Not all week.
+
+## Resets, honestly
+
+- **When each week comes back.** A Resets card lists every account, soonest
+  first: "Sat, 03:13 · in 1d 14h". The menu header shows the next one.
+- **A note when a week resets.** "Claude's week reset", once, from a fresh
+  reading. Turn it off in settings.
+- **Free resets.** ChatGPT reports them to its own Codex app, which Night
+  Conductor asks, so you see the real count. Anthropic only shows Claude's
+  free resets inside Claude, so the card says exactly that and links to your
+  usage page. Night Conductor could pretend to be Claude Code to read them; it
+  doesn't. And it never redeems a reset for you: that's your call.
+- **Wake for the reset.** Optional: a weekly firmware wake a few minutes before
+  Claude's reset, for a Mac that's asleep then. If a free reset moves your week,
+  settings says so and offers to update it.
 
 ## Install
 
@@ -100,64 +114,47 @@ cd Night-Conductor/NightConductor
 Drag `dist/Night Conductor.app` into Applications and open it. That's it. Then:
 
 1. Click the moon in your menu bar.
-2. Flip the switch to arm the night watch.
+2. Auto-resume at reset is on by default (the switch in the header).
 3. The first time, allow Keychain access (click Always Allow) and grant
    Accessibility so it can press Retry inside Conductor.
 
-Launch at login is on by default, so the watch survives a restart. Turn it off
-in settings if you prefer.
-
-While the watch is armed and inside its window, Night Conductor keeps your Mac
-awake on its own with a power assertion. No command, no password. If your Mac
-is fully asleep before the window starts, open settings and tap Nightly wake to
-schedule a firmware wake at your start hour.
+Launch at login is on by default, so a restart never leaves stalled work
+waiting. Turn it off in settings if you prefer.
 
 ## The interface
 
 <p align="center">
   <img src="docs/popover.png" width="330" alt="Popover with live meters, the decision line, and stalled sessions">
   &nbsp;&nbsp;
-  <img src="docs/settings.png" width="330" alt="Settings: watch hours, morning protection, budget ceilings">
+  <img src="docs/settings.png" width="330" alt="Settings: stop line, wake for the reset, alerts">
 </p>
 
 - **Menu bar.** A ring with your Claude usage for the week. If another account
   needs attention (running out early, burning fast), it shows that one instead,
   with its icon.
-- **Your usage.** Claude, ChatGPT (read from Codex's own logs) and Grok (read
+- **Your usage.** Claude, ChatGPT (read from your account through the Codex app) and Grok (read
   from Grok Bot's cached reading), one line each with "% used" and the reset
   time, and a one-line summary on top: "All three on track." Anything that
   needs attention opens up with a plain sentence, like "At this pace you'll use
   it all by Wednesday at 15:00, about 2 days before it resets." Readings older
   than a day are labelled as old instead of forecast from. Other AI tools are
   read only from files on your Mac: nothing extra is sent anywhere.
+- **Resets.** When each week comes back, and the honest state of free resets.
 - **Alerts.** A notification when you're burning faster than usual (choose
-  Sensitive, Balanced or Relaxed) and when you're on track to run out before a
-  reset. Each one is said once, then stays quiet.
-- **The decision line.** Plain language about what the night watch is doing and
-  why. By day it reads "Night watch starts at 23:00. It resumes stalled sessions
-  while you sleep." When it's clear to go, "Room to spare: 29% used this week,
-  1.6 days to reset."
+  Sensitive, Balanced or Relaxed), when you're on track to run out before a
+  reset, and when a week resets. Each one is said once, then stays quiet.
+- **Resume at reset.** Plain language about what happens to stalled work and
+  why: "Claude is at its weekly limit. Resumes after the reset, Saturday 03:13
+  (in 1d 14h)." or "Room to resume: 29% used, resets Saturday 03:13."
 - **Stalled sessions.** Everything waiting at the limit, with a Resume now
-  button that skips the schedule but still respects the budget.
-- **Activity log.** What got done last night.
+  button for when you want it going right away (it ignores your stop line;
+  only the real limit can stop it). Below, one line on the last resume.
 
-## During the day, too
+## Notifications and weekly stats
 
-The night window is the default, but stalls happen mid-afternoon as well.
-
-Pin a session with the loop icon on its row and it resumes around the clock,
-budget permitting, instead of waiting for night. Or hit Resume now, which goes
-immediately and ignores the schedule and the budget gates. The only thing that
-can stop a manual resume is Anthropic's actual limit.
-
-Sessions you haven't pinned still wait for the night window, so a busy day
-doesn't quietly drain your week.
-
-## Morning summary and weekly stats
-
-When the window closes, Night Conductor posts a one-line notification ("Resumed
-3 sessions while you slept"). The share button renders a card of your week you
-can drop straight into a post.
+When a run of unattended resumes finishes, one notification says what
+happened ("Resumed 3 stalled sessions"). The share button renders a card of
+your week you can drop straight into a post.
 
 <p align="center">
   <img src="docs/stat-card.png" width="420" alt="My AI week share card: weekly usage across Claude, ChatGPT and Grok">
@@ -167,8 +164,9 @@ can drop straight into a post.
 
 There's a companion [Raycast](https://raycast.com) extension in
 [`raycast/`](raycast/) with a menu-bar command for live usage and a list view
-to resume stalled sessions. The same logic also ships as a zero-dependency
-Python package for servers and tinkerers:
+to resume stalled sessions. There's also a zero-dependency Python package for
+servers and tinkerers. It is the original night-window version and hasn't been
+rebuilt around weekly resets:
 
 ```bash
 python3 -m autoconduct status     # usage, stalled sessions, decision
@@ -179,7 +177,7 @@ python3 -m autoconduct install    # launchd agent, ticks every 10 min
 
 - It never writes to the session database. Anything a resumed turn changes
   lands in the workspace, where you can see it in Conductor's diff view.
-- Overnight runs use Claude Code's `acceptEdits` mode. It can edit files, but
+- Unattended headless runs use Claude Code's `acceptEdits` mode. It can edit files, but
   not run commands you haven't approved.
 - Your OAuth token is read from the Keychain per request. It's never stored or
   logged.

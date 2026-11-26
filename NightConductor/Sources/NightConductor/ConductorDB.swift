@@ -22,8 +22,7 @@ enum ConductorDB {
         NSHomeDirectory() + "/Library/Application Support/com.conductor.app/conductor.db"
     }
 
-    /// Don't resurrect sessions abandoned at a limit ages ago.
-    static let maxStallAge: TimeInterval = 48 * 3600
+    private static let maxStallAge = StalledSession.maxAge
 
     /// The last `result` of each recently active, non-working session in a
     /// live workspace, kept only when it was a usage-limit error.

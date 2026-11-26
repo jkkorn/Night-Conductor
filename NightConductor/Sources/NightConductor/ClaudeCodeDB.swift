@@ -11,7 +11,7 @@ import Foundation
 enum ClaudeCodeDB {
     static var projectsRoot: String { NSHomeDirectory() + "/.claude/projects" }
 
-    private static let maxStallAge: TimeInterval = 48 * 3600
+    private static let maxStallAge = StalledSession.maxAge
     private static let tailBytes = 131_072  // 128KB: keep the limit error in view past large trailing tool output
     private static let headBytes = 16_000
     private static let maxDirsScanned = 120  // bound cost: at most this many project dirs

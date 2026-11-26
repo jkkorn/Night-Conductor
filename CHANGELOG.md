@@ -2,6 +2,51 @@
 
 All notable changes to Night Conductor. Dates are when the release was cut.
 
+## 1.1.0
+
+Rebuilt around the weekly limit. Claude and ChatGPT plans are weekly-only now,
+so a session stalled on the limit can't run until the week resets, at whatever
+hour that is. The night window was guarding the wrong moment.
+
+### Changed
+- **Resume at reset replaces the night watch.** Stalled sessions resume at any
+  hour once the week has room: under your stop line (90% by default) and not
+  ahead of the week's pace. At the limit it waits and says when the reset is.
+- **The Mac is kept awake only around a reset that work is waiting for** (the
+  last 30 minutes before it, or while resuming is possible), not all night.
+- **The optional firmware wake follows Claude's reset**: weekly, a few minutes
+  before it. Settings notices when a free reset has moved your week.
+- Caps are per day (10 resumes, 3 per session) instead of per night.
+- At 100% a card now says "At the weekly limit. It comes back Saturday 03:13",
+  instead of advice to ease off.
+- Claude's 20x plan is labelled "Ultra", as Claude itself labels it.
+- ChatGPT usage is read from your account (so cloud runs count), with local
+  Codex logs only as a fallback.
+
+### Added
+- **Resets card**: every account's next reset, soonest first, with a
+  countdown; the next one is also in the menu header.
+- **Honest free resets**: ChatGPT's real count from your account. For Claude,
+  a plain note that Anthropic only shows them inside Claude, with a link.
+  Night Conductor does not impersonate Claude Code to read them, and never
+  redeems a reset for you.
+- "Tell me when a week resets" notification (on by default, once per reset).
+- One "Resumed N stalled sessions" notification when a run of unattended
+  resumes finishes, replacing the morning summary.
+- Share card shows "My AI week": usage per subscription.
+- Premium coat, motion, accessibility and security hardening from the
+  Skillstore layers (see the 1.0.15 work on this branch).
+
+### Removed
+- Watch hours, morning protection and the 5-hour controls, "Resume around the
+  clock", per-session pins, resume pace, and the Activity panel (one line under
+  the stalled list now shows the last resume).
+
+### Fixed
+- Popover unreadable in Light mode.
+- Stalled-session scan took 85s every 30s on a large Conductor database; now
+  0.04s.
+
 ## 1.0.14
 
 ### Added

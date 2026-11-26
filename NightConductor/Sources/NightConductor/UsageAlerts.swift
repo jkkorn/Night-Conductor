@@ -5,15 +5,19 @@ struct AlertSettings: Equatable {
     var burnHot: Bool
     var runOut: Bool
     var sensitivity: BurnSensitivity = .balanced
+    /// "Claude's week reset": the good-news alert. On by default.
+    var weekReset: Bool = true
 
     static let burnHotKey = "alertBurnHot"
+    static let weekResetKey = "alertWeekReset"
     static let runOutKey = "alertRunOut"
     static let sensitivityKey = "alertBurnSensitivity"
 
     static func fromDefaults(_ d: UserDefaults = .standard) -> AlertSettings {
         AlertSettings(burnHot: d.object(forKey: burnHotKey) == nil || d.bool(forKey: burnHotKey),
                       runOut: d.object(forKey: runOutKey) == nil || d.bool(forKey: runOutKey),
-                      sensitivity: d.string(forKey: sensitivityKey).flatMap(BurnSensitivity.init) ?? .balanced)
+                      sensitivity: d.string(forKey: sensitivityKey).flatMap(BurnSensitivity.init) ?? .balanced,
+                      weekReset: d.object(forKey: weekResetKey) == nil || d.bool(forKey: weekResetKey))
     }
 }
 

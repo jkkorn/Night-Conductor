@@ -34,6 +34,7 @@ extension AppState {
         }
 
         let settings = AlertSettings.fromDefaults()
+        noticeResets(raw, notify: settings.weekReset, now: now)
         let threshold = settings.sensitivity.threshold
         providers = raw.map { $0.normalized(now: now) }
         assessments = Dictionary(uniqueKeysWithValues: providers.map {
@@ -41,6 +42,28 @@ extension AppState {
                                               now: now, threshold: threshold))
         })
         raiseAlerts(settings: settings, now: now)
+    }
+
+    /// Remember each provider's reset time; when it jumps a day or more
+    /// later, that week just reset. Say so once, from a fresh reading only
+    /// (a cached Grok or Codex value is never "news").
+    private func noticeResets(_ readings: [ProviderUsage], notify: Bool, now: Date) {
+        let defaults = UserDefaults.standard
+        for reading in readings where now.timeIntervalSince(reading.readAt) < 3600 {
+            guard let current = reading.weekly.resetsAt else { continue }
+            let key = "lastResetsAt.\(reading.provider.rawValue)"
+            let previous = defaults.object(forKey: key) as? Date
+            if ResetWatch.didReset(previous: previous, current: current, now: now) {
+                log("\(reading.provider.displayName)'s week reset")
+                if notify { Notifications.postWeekReset(provider: reading.provider, next: current) }
+            }
+            // Only move forward (or past a reset that already happened): a
+            // fallback source with an older date must not rewind it, or the
+            // next fresh reading would look like a second reset.
+            if ResetWatch.shouldStore(current: current, previous: previous, now: now) {
+                defaults.set(current, forKey: key)
+            }
+        }
     }
 
     private func raiseAlerts(settings: AlertSettings, now: Date) {

@@ -34,10 +34,13 @@ enum UsageClient {
         var plan: String? = nil
     }
 
-    /// "Max 20x", "Max 5x", "Pro": the plan name as Claude shows it, from the
-    /// credential's `subscriptionType` / `rateLimitTier`. Display only.
+    /// The plan name as Claude shows it, from the credential's
+    /// `subscriptionType` / `rateLimitTier`. Display only. Claude's own usage
+    /// page now calls the 20x tier "Ultra"; other tiers keep the name we can
+    /// derive ("Max 5x", "Pro") until we've seen what Claude calls them.
     static func planLabel(subscriptionType: String?, rateLimitTier: String?) -> String? {
         guard let type = subscriptionType?.prefix(24), !type.isEmpty else { return nil }
+        if type == "max", rateLimitTier?.hasSuffix("max_20x") == true { return "Ultra" }
         if let tier = rateLimitTier,
            let range = tier.range(of: #"\d+x$"#, options: .regularExpression) {
             return "\(type.capitalized) \(tier[range])"

@@ -15,24 +15,23 @@ final class ResumeEligibilityTests: XCTestCase {
         )
     }
 
-    private func eligible(_ s: StalledSession, nightOK: Bool, pins: Set<String> = []) -> Bool {
-        AppState.autoResumeEligible(s, nightOK: nightOK, pins: pins, now: now)
+    private func eligible(_ s: StalledSession) -> Bool {
+        AppState.autoResumeEligible(s, now: now)
     }
 
-    func testNightWindowGatesUnpinned() {
-        let s = session(transient: false, stalledAgo: 3600)
-        XCTAssertTrue(eligible(s, nightOK: true))                 // in window
-        XCTAssertFalse(eligible(s, nightOK: false))               // out of window, unpinned
-        XCTAssertTrue(eligible(s, nightOK: false, pins: ["s"]))   // pinned: around the clock
+    // No night window and no pins any more: a usage-limit stall is eligible
+    // any time (the budget gate decides when).
+    func testUsageLimitStallIsEligibleAnyTime() {
+        XCTAssertTrue(eligible(session(transient: false, stalledAgo: 3600)))
     }
 
     // A transient server rate-limit must cool down before we retry, so the
     // auto loop never bounces straight back into the same limit.
     func testTransientCooldown() {
-        XCTAssertFalse(eligible(session(transient: true, stalledAgo: 30), nightOK: true))   // just stalled: wait
-        XCTAssertTrue(eligible(session(transient: true, stalledAgo: 600), nightOK: true))   // past cool-down
-        XCTAssertTrue(eligible(session(transient: true, stalledAgo: nil), nightOK: true))   // unknown time: don't block
-        XCTAssertTrue(eligible(session(transient: false, stalledAgo: 30), nightOK: true))   // cool-down is transient-only
+        XCTAssertFalse(eligible(session(transient: true, stalledAgo: 30)))   // just stalled: wait
+        XCTAssertTrue(eligible(session(transient: true, stalledAgo: 600)))   // past cool-down
+        XCTAssertTrue(eligible(session(transient: true, stalledAgo: nil)))   // unknown time: don't block
+        XCTAssertTrue(eligible(session(transient: false, stalledAgo: 30)))   // cool-down is transient-only
     }
 
     // A session just resumed must not be re-fired for a cool-down, so the loop
@@ -40,11 +39,11 @@ final class ResumeEligibilityTests: XCTestCase {
     // (e.g. when a headless resume doesn't clear the host's stalled flag).
     func testResumeCooldownSpacesSameSession() {
         let s = session(transient: false, stalledAgo: 3600)
-        XCTAssertFalse(AppState.autoResumeEligible(s, nightOK: true, pins: [], now: now,
+        XCTAssertFalse(AppState.autoResumeEligible(s, now: now,
                                                    lastResumedAt: now.addingTimeInterval(-60)))    // just resumed
-        XCTAssertTrue(AppState.autoResumeEligible(s, nightOK: true, pins: [], now: now,
+        XCTAssertTrue(AppState.autoResumeEligible(s, now: now,
                                                   lastResumedAt: now.addingTimeInterval(-1200)))   // 20 min ago
-        XCTAssertTrue(AppState.autoResumeEligible(s, nightOK: true, pins: [], now: now,
+        XCTAssertTrue(AppState.autoResumeEligible(s, now: now,
                                                   lastResumedAt: nil))                              // never
     }
 

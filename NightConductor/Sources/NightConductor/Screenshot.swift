@@ -25,7 +25,7 @@ enum Screenshotter {
         let previousArmed = UserDefaults.standard.object(forKey: "armed")
         defer { UserDefaults.standard.set(previousArmed, forKey: "armed") }
         let state = demoState(stateName)
-        let root = MenuView(showSettings: showSettings, showActivity: stateName == "activity")
+        let root = MenuView(showSettings: showSettings)
             .environmentObject(state)
             .frame(width: 340)
             .fixedSize(horizontal: false, vertical: true)
@@ -115,7 +115,7 @@ enum Screenshotter {
     /// Demo readings for the share card render (never real account data).
     static func demoProviders(now: Date = Date()) -> [ProviderUsage] {
         [
-            ProviderUsage(provider: .claude, source: "Claude Code", plan: "Max 20x",
+            ProviderUsage(provider: .claude, source: "Claude Code", plan: "Ultra",
                           weekly: UsageWindow(utilization: 69, resetsAt: now.addingTimeInterval(86_400)), readAt: now),
             ProviderUsage(provider: .chatgpt, source: "ChatGPT account", plan: "Pro",
                           weekly: UsageWindow(utilization: 77, resetsAt: now.addingTimeInterval(4 * 86_400)), readAt: now),
@@ -127,7 +127,7 @@ enum Screenshotter {
     private static func demoState(_ name: String = "default") -> AppState {
         // Per-state knobs so we can audit every visual state as a still.
         let armed = name != "paused"
-        let weekly = name == "high" ? 76.0 : 29.0
+        let weekly = name == "high" ? 76.0 : (name == "waiting" ? 100.0 : 29.0)
         UserDefaults.standard.set(armed, forKey: "armed")
 
         let state = AppState(forScreenshots: true)
@@ -140,14 +140,15 @@ enum Screenshotter {
                 modelName: "Fable",
                 window: UsageWindow(utilization: 41, resetsAt: now.addingTimeInterval(3.4 * 86_400))
             ),
-            plan: "Max 20x",
+            plan: "Ultra",
             fetchedAt: now
         )
         let claude = ProviderUsage.claude(from: state.usage!)
-        let chatgpt = ProviderUsage(provider: .chatgpt, source: "Codex", plan: "Pro",
+        var chatgpt = ProviderUsage(provider: .chatgpt, source: "Codex", plan: "Pro",
                                     weekly: UsageWindow(utilization: name == "high" ? 71 : 26,
                                                         resetsAt: now.addingTimeInterval(5.1 * 86_400)),
                                     readAt: now.addingTimeInterval(-120))
+        chatgpt.freeResetsAvailable = 1
         let grok = ProviderUsage(provider: .grok, source: "Grok Bot", plan: "Grok Bot Plan",
                                  weekly: UsageWindow(utilization: 52, resetsAt: now.addingTimeInterval(1.8 * 86_400)),
                                  readAt: now.addingTimeInterval(-2 * 86_400))
@@ -167,9 +168,8 @@ enum Screenshotter {
             .grok: BurnAssessment(evenPacePercent: 74, runsOutAt: nil, recentRate: nil, usualRate: nil,
                                   isBurningHot: false),
         ]
-        state.decision = name == "high"
-            ? Decision(resume: false, reason: "Using the week too fast: 76% used, 1.6 days to reset", state: .holding)
-            : Decision(resume: true, reason: "Room to spare: 29% used this week, 1.6 days to reset", state: .resuming)
+        // The real policy, on the demo reading, so the docs say what the app says.
+        state.decision = Policy.shouldResume(usage: state.usage!, config: PolicyConfig(), now: now)
         let base = [
             StalledSession(
                 sessionID: "demo-1", claudeSessionID: "demo-1",

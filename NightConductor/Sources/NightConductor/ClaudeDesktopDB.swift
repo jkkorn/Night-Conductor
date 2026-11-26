@@ -11,7 +11,7 @@ enum ClaudeDesktopDB {
             + "/Library/Application Support/Claude/local-agent-mode-sessions"
     }
 
-    private static let maxStallAge: TimeInterval = 48 * 3600
+    private static let maxStallAge = StalledSession.maxAge
 
     static func findStalledSessions(
         root: String = sessionsRoot, now: Date = Date()

@@ -13,6 +13,7 @@ enum UsageWording {
 /// Where a provider's week is heading, said as one plain sentence.
 /// Always paired with an icon, so it never relies on color alone.
 enum PaceStatus: Equatable {
+    case atLimit
     case burningHot
     case runsOut(Date)
     case ahead
@@ -28,6 +29,8 @@ enum PaceStatus: Equatable {
         if usage.isResetSinceReading { return .resetSinceReading }
         // An old reading can't support a forecast; say it's old instead.
         if now.timeIntervalSince(usage.readAt) > UsageSummary.staleAfter { return .stale(usage.readAt) }
+        // Spent: forecasts and "ease off" are moot until the reset.
+        if usage.weekly.utilization >= 100 { return .atLimit }
         if a.isBurningHot { return .burningHot }
         if let runOut = a.runsOutAt { return .runsOut(runOut) }
         guard let even = a.evenPacePercent else { return .unknown }
@@ -51,6 +54,12 @@ enum PaceStatus: Equatable {
     func sentence(usage: ProviderUsage, assessment a: BurnAssessment, now: Date = Date()) -> String {
         let reset = usage.weekly.resetsAt.map { Self.possessiveDay($0, now: now) + " reset" } ?? "the reset"
         switch self {
+        case .atLimit:
+            guard let resets = usage.weekly.resetsAt, resets > now else {
+                return "At the weekly limit. It comes back at the reset."
+            }
+            return "At the weekly limit. It comes back "
+                + "\(resets.formatted(.dateTime.weekday(.wide).hour().minute())), \(ResetWatch.countdown(to: resets, now: now))."
         case .onPace:
             return "On track. You should reach \(reset) with room to spare."
         case .ahead:
@@ -83,6 +92,7 @@ enum PaceStatus: Equatable {
 
     var symbol: String {
         switch self {
+        case .atLimit: return "moon.stars.fill"
         case .burningHot: return "flame.fill"
         case .runsOut: return "exclamationmark.triangle.fill"
         case .ahead: return "hare.fill"
@@ -98,7 +108,7 @@ enum PaceStatus: Equatable {
     var warningTint: Color? {
         switch self {
         case .burningHot, .runsOut: return .red
-        case .ahead: return .orange
+        case .ahead, .atLimit: return .orange
         default: return nil
         }
     }
@@ -276,7 +286,7 @@ struct ProviderBudgetRow: View {
             .font(.callout)
 
             Group {
-                LimitRow(title: "This week", window: usage.weekly, tint: barTint, height: 6, showsReset: true,
+                LimitRow(title: "This week", window: usage.weekly, tint: barTint, height: 6, showsReset: false,
                          isUnknown: usage.isResetSinceReading)
                 ForEach(extras, id: \.0) { name, window in
                     LimitRow(title: name, window: window, tint: ProviderBrand.accent(usage.provider), height: 4,
@@ -285,19 +295,7 @@ struct ProviderBudgetRow: View {
             }
             .opacity(isStale ? 0.55 : 1)
 
-            if UsageSummary.suggestsFreeReset(usage, now: now) {
-                Link(destination: UsageSummary.claudeUsagePage) {
-                    Label("Have a free limit reset? Open Claude usage", systemImage: "arrow.up.forward.app")
-                        .font(.callout)
-                }
-                .help("Claude's free resets live on claude.ai. Night Conductor can't see or use them for you.")
-            }
-
-            if usage.freeResetsAvailable > 0 {
-                Label(UsageWording.freeResets(usage.freeResetsAvailable), systemImage: "gift")
-                    .font(.callout).foregroundStyle(.secondary)
-                    .help("Granted to your account. Use them in Codex when you want; Night Conductor never spends one for you.")
-            }
+            // Free resets live in the Resets card, said once and honestly.
         }
         .glassCard(tint: status.warningTint)
         .accessibilityElement(children: .combine)
@@ -356,7 +354,7 @@ private struct LimitRow: View {
 }
 
 /// Three-way "how touchy are burn alerts" control. Built from plain buttons
-/// (like HourStepper) because AppKit-backed pickers trigger layout cycles in
+/// because AppKit-backed pickers trigger layout cycles in
 /// this popover's hosting context.
 struct SensitivityPicker: View {
     @Binding var selection: BurnSensitivity

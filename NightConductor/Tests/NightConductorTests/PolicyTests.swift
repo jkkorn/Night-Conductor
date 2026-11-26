@@ -14,10 +14,10 @@ final class PolicyTests: XCTestCase {
     }
 
     private func snapshot(
-        fiveHour: Double = 10, weekly: Double = 10, resetsInDays: Double = 3, now: Date
+        fiveHour: Double? = nil, weekly: Double = 10, resetsInDays: Double = 3, now: Date
     ) -> UsageSnapshot {
         UsageSnapshot(
-            fiveHour: UsageWindow(utilization: fiveHour, resetsAt: nil),
+            fiveHour: fiveHour.map { UsageWindow(utilization: $0, resetsAt: nil) },
             sevenDay: UsageWindow(
                 utilization: weekly,
                 resetsAt: now.addingTimeInterval(resetsInDays * 86_400)
@@ -26,125 +26,97 @@ final class PolicyTests: XCTestCase {
         )
     }
 
-    func testActiveHoursMidnightWrap() {
-        XCTAssertTrue(Policy.inActiveHours(hour: 2, start: 23, end: 7))
-        XCTAssertTrue(Policy.inActiveHours(hour: 23, start: 23, end: 7))
-        XCTAssertFalse(Policy.inActiveHours(hour: 12, start: 23, end: 7))
-        XCTAssertTrue(Policy.inActiveHours(hour: 5, start: 0, end: 0)) // always
+    private func decide(_ usage: UsageSnapshot, at now: Date, config: PolicyConfig = PolicyConfig()) -> Decision {
+        Policy.shouldResume(usage: usage, config: config, now: now)
     }
 
-    func testDecisionStatesReflectWhyNotResuming() {
-        let noon = date(hour: 12)
-        // Daytime: off the night watch — a calm standing-by state, not a hold,
-        // and the copy no longer says the confusing "active hours".
-        let standby = Policy.shouldResume(
-            usage: snapshot(now: noon), config: PolicyConfig(), now: noon, calendar: utc)
-        XCTAssertEqual(standby.state, .standingBy)
-        XCTAssertFalse(standby.reason.localizedCaseInsensitiveContains("active hours"))
-
-        // In-window, healthy budget: clear to resume.
-        let twoAM = date(hour: 2)
-        let go = Policy.shouldResume(
-            usage: snapshot(now: twoAM), config: PolicyConfig(), now: twoAM, calendar: utc)
-        XCTAssertEqual(go.state, .resuming)
-
-        // In-window, over the 5h ceiling: an amber hold.
-        let hold = Policy.shouldResume(
-            usage: snapshot(fiveHour: 90, now: twoAM), config: PolicyConfig(),
-            now: twoAM, calendar: utc)
-        XCTAssertEqual(hold.state, .holding)
+    // There is no night: the same healthy week resumes at noon and at 2am.
+    func testAnyHourResumesWhenTheWeekHasRoom() {
+        for hour in [2, 12, 18] {
+            let now = date(hour: hour)
+            let d = decide(snapshot(now: now), at: now)
+            XCTAssertTrue(d.resume, "hour \(hour): \(d.reason)")
+            XCTAssertEqual(d.state, .resuming)
+        }
     }
 
-    func testFiveHourCeilingHolds() {
+    // At the real limit, waiting for the reset is the plan: calm, and it
+    // says when the reset is.
+    func testAtTheLimitWaitsForTheResetCalmly() {
+        let now = date(hour: 12)
+        let d = decide(snapshot(weekly: 100, resetsInDays: 0.5, now: now), at: now)
+        XCTAssertFalse(d.resume)
+        XCTAssertEqual(d.state, .waitingForReset)
+        XCTAssertTrue(d.reason.contains("weekly limit"), d.reason)
+        XCTAssertTrue(d.reason.contains("in 12h"), d.reason)
+    }
+
+    func testStopLineLeavesTheRestOfTheWeekToYou() {
+        let now = date(hour: 12)
+        let d = decide(snapshot(weekly: 92, resetsInDays: 0.2, now: now), at: now)
+        XCTAssertFalse(d.resume)
+        XCTAssertEqual(d.state, .waitingForReset)
+        XCTAssertTrue(d.reason.contains("past your 90% stop"), d.reason)
+    }
+
+    func testStopLineIsConfigurable() {
+        let now = date(hour: 12)
+        var config = PolicyConfig()
+        config.weeklyCeiling = 80
+        XCTAssertFalse(decide(snapshot(weekly: 82, resetsInDays: 0.2, now: now), at: now, config: config).resume)
+    }
+
+    func testStopLineIsClampedFromDefaults() {
+        let suite = "PolicyTests-\(UUID().uuidString)"
+        let d = UserDefaults(suiteName: suite)!
+        defer { d.removePersistentDomain(forName: suite) }
+        d.set(5.0, forKey: "weeklyCeiling")
+        XCTAssertEqual(PolicyConfig.fromDefaults(d).weeklyCeiling, 50)
+        d.set(400.0, forKey: "weeklyCeiling")
+        XCTAssertEqual(PolicyConfig.fromDefaults(d).weeklyCeiling, 100)
+    }
+
+    // A plan that still reports a short window: its ceiling still holds.
+    func testFiveHourCeilingHoldsWhenThePlanHasOne() {
         let now = date(hour: 2)
-        let decision = Policy.shouldResume(
-            usage: snapshot(fiveHour: 90, now: now),
-            config: PolicyConfig(), now: now, calendar: utc
-        )
-        XCTAssertFalse(decision.resume)
-        XCTAssertTrue(decision.reason.contains("5-hour"))
+        let d = decide(snapshot(fiveHour: 90, now: now), at: now)
+        XCTAssertFalse(d.resume)
+        XCTAssertTrue(d.reason.contains("5-hour"))
     }
 
-    // Claude and ChatGPT dropped the 5-hour window (the usage API now returns
-    // `five_hour: null`). With no short window there's nothing to keep fresh
-    // for the morning, and no 5h ceiling to check: only the weekly gates apply.
+    // Weekly-only plans (the API sends `five_hour: null`): only weekly gates.
     func testNoFiveHourWindowSkipsShortWindowGates() {
-        let fiveAM = date(hour: 5)
-        let weeklyOnly = UsageSnapshot(
-            fiveHour: nil,
-            sevenDay: UsageWindow(utilization: 10, resetsAt: fiveAM.addingTimeInterval(3 * 86_400)),
-            fetchedAt: fiveAM
-        )
-        let decision = Policy.shouldResume(usage: weeklyOnly, config: PolicyConfig(),
-                                           now: fiveAM, calendar: utc)
-        XCTAssertTrue(decision.resume, decision.reason)
-        XCTAssertFalse(decision.reason.contains("5-hour"))
+        let now = date(hour: 5)
+        let d = decide(snapshot(fiveHour: nil, now: now), at: now)
+        XCTAssertTrue(d.resume, d.reason)
+        XCTAssertFalse(d.reason.contains("5-hour"))
     }
 
-    func testMorningProtectionHoldsWithinFiveHoursOfWake() {
-        let fiveAM = date(hour: 5) // wake at 7 -> window would be hot until 10
-        let decision = Policy.shouldResume(
-            usage: snapshot(now: fiveAM), config: PolicyConfig(),
-            now: fiveAM, calendar: utc
-        )
-        XCTAssertFalse(decision.resume)
-        XCTAssertTrue(decision.reason.contains("Morning protection"))
-    }
-
-    func testTwoAMIsTheLastSafeStart() {
-        let twoAM = date(hour: 2) // exactly 5h before wake -> resets by 07:00
-        let decision = Policy.shouldResume(
-            usage: snapshot(now: twoAM), config: PolicyConfig(),
-            now: twoAM, calendar: utc
-        )
-        XCTAssertTrue(decision.resume)
-    }
-
-    func testBurningTooFastHolds() {
+    func testBurningTooFastHoldsAndSaysItLifts() {
         let now = date(hour: 2)
-        let decision = Policy.shouldResume(
-            usage: snapshot(weekly: 70, resetsInDays: 5, now: now),
-            config: PolicyConfig(), now: now, calendar: utc
-        )
-        XCTAssertFalse(decision.resume)
-        XCTAssertTrue(decision.reason.contains("too fast"))
+        let d = decide(snapshot(weekly: 70, resetsInDays: 5, now: now), at: now)
+        XCTAssertFalse(d.resume)
+        XCTAssertEqual(d.state, .holding)
+        XCTAssertTrue(d.reason.contains("so the week lasts"), d.reason)
     }
 
-    // Pacing boundary: 3.5 days left → 50% of the week elapsed → allowed =
+    // Pacing boundary: 3.5 days left -> 50% of the week elapsed -> allowed =
     // 50 + pacingMargin(15) = 65%. At or under that we resume; just over holds.
     func testWeeklyPacingBoundary() {
         let now = date(hour: 2)
-        let cfg = PolicyConfig()
-        XCTAssertTrue(
-            Policy.budgetAllows(usage: snapshot(weekly: 64, resetsInDays: 3.5, now: now),
-                                config: cfg, now: now).resume)
-        XCTAssertFalse(
-            Policy.budgetAllows(usage: snapshot(weekly: 66, resetsInDays: 3.5, now: now),
-                                config: cfg, now: now).resume)
+        XCTAssertTrue(decide(snapshot(weekly: 64, resetsInDays: 3.5, now: now), at: now).resume)
+        XCTAssertFalse(decide(snapshot(weekly: 66, resetsInDays: 3.5, now: now), at: now).resume)
+    }
+
+    // Right after a reset the week is fresh, and pace allows the first 15%.
+    func testFreshWeekAfterResetResumes() {
+        let now = date(hour: 2)
+        XCTAssertTrue(decide(snapshot(weekly: 0, resetsInDays: 7, now: now), at: now).resume)
     }
 
     func testHighUsageNearResetResumes() {
         let now = date(hour: 2)
-        let decision = Policy.shouldResume(
-            usage: snapshot(weekly: 70, resetsInDays: 0.5, now: now),
-            config: PolicyConfig(), now: now, calendar: utc
-        )
-        XCTAssertTrue(decision.resume)
-    }
-
-    func testManualTickBypassesHoursButNotBudget() {
-        let noon = date(hour: 12)
-        let underBudget = Policy.shouldResume(
-            usage: snapshot(now: noon), config: PolicyConfig(),
-            now: noon, calendar: utc, ignoreActiveHours: true
-        )
-        XCTAssertTrue(underBudget.resume)
-
-        let overBudget = Policy.shouldResume(
-            usage: snapshot(fiveHour: 95, now: noon), config: PolicyConfig(),
-            now: noon, calendar: utc, ignoreActiveHours: true
-        )
-        XCTAssertFalse(overBudget.resume)
+        XCTAssertTrue(decide(snapshot(weekly: 70, resetsInDays: 0.5, now: now), at: now).resume)
     }
 
     func testISOParsingHandlesBothPrecisions() {
@@ -170,29 +142,25 @@ final class UIResumerTests: XCTestCase {
     }
 }
 
-final class NightLedgerTests: XCTestCase {
+final class ResumeLedgerTests: XCTestCase {
     private func saoPaulo() -> Calendar {
         var c = Calendar(identifier: .gregorian)
         c.timeZone = TimeZone(identifier: "America/Sao_Paulo")! // UTC-3
         return c
     }
 
-    func testNightKeyStableAcrossLocalMidnightInNegativeOffsetTZ() {
-        // Regression (C1): the key must not flip at local midnight in a
-        // negative-UTC-offset zone, or the nightly caps reset every night.
+    func testDayKeyIsTheLocalDateNotUTC() {
+        // 22:30 local in UTC-3 is already the next day in UTC; the key must
+        // follow the local day, or the daily caps reset in the evening.
         let cal = saoPaulo()
-        let evening = cal.date(from: DateComponents(
-            year: 2026, month: 6, day: 10, hour: 23, minute: 30))!
-        let afterMidnight = cal.date(from: DateComponents(
-            year: 2026, month: 6, day: 11, hour: 0, minute: 30))!
-        let k1 = NightLedger.currentKey(now: evening, startHour: 23, calendar: cal)
-        let k2 = NightLedger.currentKey(now: afterMidnight, startHour: 23, calendar: cal)
-        XCTAssertEqual(k1, k2, "night key must be stable across local midnight")
-        XCTAssertEqual(k1, "2026-06-10")
+        let evening = cal.date(from: DateComponents(year: 2026, month: 6, day: 10, hour: 22, minute: 30))!
+        XCTAssertEqual(ResumeLedger.currentKey(now: evening, calendar: cal), "2026-06-10")
+        let next = cal.date(from: DateComponents(year: 2026, month: 6, day: 11, hour: 0, minute: 30))!
+        XCTAssertEqual(ResumeLedger.currentKey(now: next, calendar: cal), "2026-06-11")
     }
 
     func testRecordingIsImmutableAndCounts() {
-        let base = NightLedger(key: "2026-06-10", counts: [:])
+        let base = ResumeLedger(key: "2026-06-10", counts: [:])
         let after = base.recordingSuccess("s1").recordingSuccess("s1").recordingSuccess("s2")
         XCTAssertEqual(base.total, 0) // original unchanged
         XCTAssertEqual(after.count(for: "s1"), 2)

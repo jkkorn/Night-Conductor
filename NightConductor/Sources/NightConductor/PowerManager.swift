@@ -1,11 +1,11 @@
 import Foundation
 import IOKit.pwr_mgt
 
-/// Keeps the Mac available for the night shift in two complementary ways:
-///   1. A power assertion that prevents idle sleep while the watch is active
-///      (no privileges needed) — covers a Mac that's awake at bedtime.
-///   2. An optional firmware wake schedule (`pmset`, needs an admin prompt)
-///      for a Mac that's fully asleep when the window begins.
+/// Keeps the Mac available for a reset in two complementary ways:
+///   1. A power assertion that prevents idle sleep around a reset that stalled
+///      work is waiting for (no privileges needed).
+///   2. An optional weekly firmware wake a few minutes before Claude's reset
+///      (`pmset repeat`, needs an admin prompt once) for a Mac that's asleep.
 enum PowerManager {
     // MARK: - Prevent idle sleep (no privileges)
 
@@ -39,40 +39,67 @@ enum PowerManager {
 
     // MARK: - Firmware wake schedule (needs admin prompt)
 
-    /// Schedule a daily wake-or-power-on at `hour:00`, derived from the
-    /// user's watch start hour. Shows the native macOS admin prompt once.
-    /// Returns true if the command succeeded.
+    /// Schedule a weekly wake-or-power-on just before the reset (see
+    /// `ResetWatch.wakeSpec`). `pmset` keeps one repeating schedule, so this
+    /// replaces any earlier one. Shows the native admin prompt once. The spec
+    /// is built from a fixed letter set and a formatted time, never free text.
     @discardableResult
-    static func scheduleNightlyWake(hour: Int) -> Bool {
-        let hh = String(format: "%02d", max(0, min(23, hour)))
-        return runPrivileged("/usr/bin/pmset repeat wakeorpoweron MTWRFSU \(hh):00:00")
+    static func scheduleResetWake(_ spec: ResetWatch.WakeSpec) -> Bool {
+        guard "MTWRFSU".contains(spec.day), spec.day.count == 1,
+              spec.time.range(of: #"^\d{2}:\d{2}:00$"#, options: .regularExpression) != nil
+        else { return false }
+        guard runPrivileged("/usr/bin/pmset repeat \(spec.pmsetArguments)") else { return false }
+        if let data = try? JSONEncoder().encode(spec) {
+            UserDefaults.standard.set(data, forKey: scheduledSpecKey)
+        }
+        return true
     }
 
     @discardableResult
-    static func cancelNightlyWake() -> Bool {
-        runPrivileged("/usr/bin/pmset repeat cancel")
+    static func cancelScheduledWake() -> Bool {
+        guard runPrivileged("/usr/bin/pmset repeat cancel") else { return false }
+        UserDefaults.standard.removeObject(forKey: scheduledSpecKey)
+        return true
     }
 
-    /// Reads the current repeating schedule (best-effort, no privileges).
-    static func currentWakeSchedule() -> String? {
+    private static let scheduledSpecKey = "resetWakeSpec"
+
+    /// What we last asked pmset for, to tell "scheduled for this reset" from
+    /// "scheduled for an old one" (a free reset moves the week).
+    static var scheduledSpec: ResetWatch.WakeSpec? {
+        guard let data = UserDefaults.standard.data(forKey: scheduledSpecKey) else { return nil }
+        return try? JSONDecoder().decode(ResetWatch.WakeSpec.self, from: data)
+    }
+
+    /// The Mac's current repeating power events (`pmset -g sched`), one line
+    /// each. Read-only, no privileges. `pmset repeat` replaces the whole
+    /// repeating schedule, so settings shows these before overwriting them.
+    static func repeatingEvents() -> [String] {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
         process.arguments = ["-g", "sched"]
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = Pipe()
-        guard (try? process.run()) != nil else { return nil }
+        guard (try? process.run()) != nil else { return [] }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-        let out = String(
-            data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8
-        ) ?? ""
-        // The "Repeating power events" section lists a wake/poweron line.
-        for line in out.split(separator: "\n") where
-            line.localizedCaseInsensitiveContains("wakepoweron")
-            || line.localizedCaseInsensitiveContains("wakeorpoweron") {
-            return line.trimmingCharacters(in: .whitespaces)
+        return parseRepeating(String(decoding: data, as: UTF8.self))
+    }
+
+    /// Lines under "Repeating power events:" up to the next section.
+    static func parseRepeating(_ output: String) -> [String] {
+        var inSection = false
+        var events: [String] = []
+        for raw in output.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.lowercased().hasPrefix("repeating power events") { inSection = true; continue }
+            if inSection {
+                if line.isEmpty || line.hasSuffix(":") { break }
+                events.append(String(line.prefix(120)))
+            }
         }
-        return nil
+        return events
     }
 
     private static func runPrivileged(_ command: String) -> Bool {

@@ -84,59 +84,6 @@ struct UsageRing: View {
     }
 }
 
-/// Custom hour stepper — replaces AppKit `Stepper` (which triggers
-/// AttributeGraph layout cycles in this hosting context) with a crafted
-/// −/+ control that matches the night theme.
-struct HourStepper: View {
-    @Binding var hour: Int
-    var range: ClosedRange<Int> = 0...23
-    var label: String = "Hour"
-
-    var body: some View {
-        HStack(spacing: Design.m) {
-            Text(String(format: "%02d:00", hour))
-                .font(.caption.monospacedDigit().weight(.semibold))
-                .frame(width: 46, alignment: .leading)
-                .contentTransition(.numericText())
-            HStack(spacing: 3) {
-                button("Earlier", icon: "minus") { set(hour - 1) }
-                button("Later", icon: "plus") { set(hour + 1) }
-            }
-        }
-        // VoiceOver hears one adjustable control ("Watch from, 22:00"),
-        // swiped up or down, instead of two unlabeled glyphs.
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(label)
-        .accessibilityValue(String(format: "%02d:00", hour))
-        .accessibilityAdjustableAction { direction in
-            switch direction {
-            case .increment: set(hour + 1)
-            case .decrement: set(hour - 1)
-            @unknown default: break
-            }
-        }
-    }
-
-    private func set(_ v: Int) {
-        withAnimation(.snappy(duration: 0.18)) {
-            hour = min(range.upperBound, max(range.lowerBound, v))
-        }
-    }
-
-    private func button(_ title: String, icon: String, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Label(title, systemImage: icon)
-                .labelStyle(.iconOnly)
-                .font(.caption).bold()
-                .frame(width: 20, height: 18)
-                .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 5))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.primary.opacity(0.8))
-    }
-}
-
 /// Custom slider — replaces AppKit `Slider` (cycle source) with a draggable
 /// track + knob in the accent color, with a spring on tick changes.
 struct NightSlider: View {

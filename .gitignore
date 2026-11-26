@@ -12,3 +12,6 @@ __pycache__/
 
 # macOS
 .DS_Store
+
+# Local working files (screenshots, attachments, notes)
+.context/

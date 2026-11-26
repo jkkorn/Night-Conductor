@@ -160,7 +160,7 @@ When the window closes, Night Conductor posts a one-line notification ("Resumed
 can drop straight into a post.
 
 <p align="center">
-  <img src="docs/stat-card.png" width="420" alt="Weekly stat card">
+  <img src="docs/stat-card.png" width="420" alt="My AI week share card: weekly usage across Claude, ChatGPT and Grok">
 </p>
 
 ## Raycast extension and CLI

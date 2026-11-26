@@ -596,9 +596,10 @@ struct AboutSection: View {
     var body: some View {
         VStack(spacing: Design.s) {
             HStack {
-                Button("Share this week\u{2019}s stats", systemImage: "square.and.arrow.up") {
-                    StatCardExporter.share()
+                Button("Share my AI week", systemImage: "square.and.arrow.up") {
+                    StatCardExporter.share(providers: state.providers)
                 }
+                .disabled(state.providers.allSatisfy(\.isResetSinceReading))
                 Button(historyCleared ? "History cleared" : "Clear history",
                        systemImage: historyCleared ? "checkmark" : "trash") {
                     state.clearLocalHistory()

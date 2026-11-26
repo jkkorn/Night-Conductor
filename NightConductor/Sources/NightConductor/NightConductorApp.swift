@@ -32,11 +32,12 @@ enum Main {
             MainActor.assumeIsolated { Screenshotter.renderMenuBar(to: args[flagIndex + 1]) }
             return
         }
-        if let flagIndex = args.firstIndex(of: "--render-statcard"), args.count > flagIndex + 2 {
-            let count = Int(args[flagIndex + 1]) ?? 12
+        if let flagIndex = args.firstIndex(of: "--render-statcard"), args.count > flagIndex + 1 {
+            // Demo numbers only, for docs: NightConductor --render-statcard out.png
             MainActor.assumeIsolated {
                 NightSkyView.hourOverride = 23
-                _ = StatCardExporter.render(count: count, to: URL(fileURLWithPath: args[flagIndex + 2]))
+                _ = StatCardExporter.render(providers: Screenshotter.demoProviders(),
+                                            to: URL(fileURLWithPath: args[flagIndex + 1]))
             }
             return
         }

@@ -112,6 +112,18 @@ enum Screenshotter {
         print("Wrote \(path)")
     }
 
+    /// Demo readings for the share card render (never real account data).
+    static func demoProviders(now: Date = Date()) -> [ProviderUsage] {
+        [
+            ProviderUsage(provider: .claude, source: "Claude Code", plan: "Max 20x",
+                          weekly: UsageWindow(utilization: 69, resetsAt: now.addingTimeInterval(86_400)), readAt: now),
+            ProviderUsage(provider: .chatgpt, source: "ChatGPT account", plan: "Pro",
+                          weekly: UsageWindow(utilization: 77, resetsAt: now.addingTimeInterval(4 * 86_400)), readAt: now),
+            ProviderUsage(provider: .grok, source: "Grok Bot", plan: "Grok Bot Plan",
+                          weekly: UsageWindow(utilization: 16, resetsAt: now.addingTimeInterval(5 * 86_400)), readAt: now),
+        ]
+    }
+
     private static func demoState(_ name: String = "default") -> AppState {
         // Per-state knobs so we can audit every visual state as a still.
         let armed = name != "paused"

@@ -9,12 +9,12 @@
 # the release asset, not an earlier build.
 # Until the app is notarized, installs should add --no-quarantine (see caveats).
 cask "night-conductor" do
-  version "1.0.14"
-  sha256 "985bd0fcd57ae25b9b4c68cf1dd3dca4f8a3600ddaea846d23452712ea167c19"
+  version "1.1.0"
+  sha256 "7940b54c5cb80bdb782a60c9e3e54462d403a6ef12cf65e10d7622d8a886950e"
 
   url "https://github.com/jkkorn/Night-Conductor/releases/download/v#{version}/Night-Conductor-#{version}.zip"
   name "Night Conductor"
-  desc "Weekly AI usage at a glance, and stalled sessions resumed while you sleep"
+  desc "Weekly AI usage and resets at a glance, stalled sessions resumed at the reset"
   homepage "https://github.com/jkkorn/Night-Conductor"
 
   depends_on macos: ">= :sequoia"

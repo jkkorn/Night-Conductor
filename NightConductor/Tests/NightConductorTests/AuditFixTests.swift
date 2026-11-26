@@ -72,15 +72,17 @@ final class AuditFixTests: XCTestCase {
 
     // MARK: copy (D6)
 
-    func testNightWatchStandbyIsPlain() {
+    func testRoomToResumeIsPlainAndNamesTheReset() {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(identifier: "UTC")!
         let noon = cal.date(from: DateComponents(year: 2026, month: 6, day: 11, hour: 12))!
         let snap = UsageSnapshot(fiveHour: nil,
                                  sevenDay: UsageWindow(utilization: 10, resetsAt: noon.addingTimeInterval(86_400 * 3)),
                                  fetchedAt: noon)
-        let d = Policy.shouldResume(usage: snap, config: PolicyConfig(), now: noon, calendar: cal)
-        XCTAssertEqual(d.reason, "Night watch starts at 23:00. It resumes stalled sessions while you sleep.")
+        let d = Policy.shouldResume(usage: snap, config: PolicyConfig(), now: noon)
+        XCTAssertTrue(d.reason.hasPrefix("Room to resume: 10% used, resets "), d.reason)
+        XCTAssertTrue(d.reason.hasSuffix("(in 3d)."), d.reason)
+        XCTAssertFalse(d.reason.localizedCaseInsensitiveContains("night"))
     }
 
     // MARK: setup checklist includes alerts (P4)

@@ -1,109 +1,77 @@
 import Foundation
 
-/// Budget policy — the brain. Direct port of the Python `autoconduct.policy`
-/// module so the CLI and the app always agree on what "safe" means.
+/// Budget policy: the brain. Claude and ChatGPT plans are weekly-only, so a
+/// session stalled on the limit can't run again until the week resets, at
+/// whatever hour that is. There is no "night": the gate is the week itself.
+///
+/// Unattended resumes need all three:
+///   1. you're under your stop line ("keep the last 10% for me"),
+///   2. you aren't spending the week faster than it's passing (with a margin),
+///   3. a fresh usage reading (checked by the caller; no reading, no resume).
 enum Policy {
-    static func inActiveHours(hour: Int, start: Int, end: Int) -> Bool {
-        if start == end { return true }
-        if start < end { return start <= hour && hour < end }
-        return hour >= start || hour < end
-    }
-
-    /// Length of Claude's rolling session window in hours.
-    static let fiveHourWindow = 5.0
-
-    static func hoursUntilWake(nowHour: Double, wakeHour: Int) -> Double {
-        let remaining = (Double(wakeHour) - nowHour).truncatingRemainder(dividingBy: 24)
-        return remaining < 0 ? remaining + 24 : remaining
-    }
-
     static func daysUntilWeeklyReset(_ usage: UsageSnapshot, now: Date) -> Double {
         guard let resetsAt = usage.sevenDay.resetsAt else { return 0 }
         return max(0, resetsAt.timeIntervalSince(now) / 86_400)
     }
 
-    static func shouldResume(
-        usage: UsageSnapshot,
-        config: PolicyConfig,
-        now: Date,
-        calendar: Calendar = .current,
-        ignoreActiveHours: Bool = false
-    ) -> Decision {
-        let hour = calendar.component(.hour, from: now)
-        if !ignoreActiveHours,
-           !inActiveHours(hour: hour, start: config.startHour, end: config.endHour) {
-            // Not a problem state — you're awake and at the helm; the night
-            // watch simply hasn't started yet. Phrase it around when it takes
-            // over, not "outside <something> hours".
-            return Decision(
-                resume: false,
-                reason: "Night watch starts at \(config.startHour):00. It resumes stalled sessions while you sleep.",
-                state: .standingBy
-            )
-        }
-
-        // Morning protection: the user is back at the computer at endHour.
-        // A session started now anchors a 5h window — never start one that
-        // would still be hot when they sit down (a 6am resume would lock
-        // them out until 11am).
-        // Only meaningful while the plan HAS a 5-hour window. Weekly-only plans
-        // (Claude and ChatGPT since the change) have nothing to keep fresh.
-        if !ignoreActiveHours, config.startHour != config.endHour, usage.fiveHour != nil {
-            let minute = calendar.component(.minute, from: now)
-            let nowFrac = Double(hour) + Double(minute) / 60.0
-            let remaining = hoursUntilWake(nowHour: nowFrac, wakeHour: config.endHour)
-            if remaining < Self.fiveHourWindow {
-                return Decision(
-                    resume: false,
-                    reason: "Morning protection: a session now would hold your "
-                        + "5-hour window past \(config.endHour):00 "
-                        + "(you're back in \(String(format: "%.1f", remaining))h)"
-                )
-            }
-        }
-
-        return budgetAllows(usage: usage, config: config, now: now)
+    /// "Friday 01:59 (in 14h)", or nil when the API didn't say.
+    static func resetPhrase(_ usage: UsageSnapshot, now: Date) -> String? {
+        guard let resets = usage.sevenDay.resetsAt, resets > now else { return nil }
+        let day = resets.formatted(.dateTime.weekday(.wide).hour().minute())
+        return "\(day) (\(ResetWatch.countdown(to: resets, now: now)))"
     }
 
-    /// Budget-only gate: the 5h / weekly ceilings and the weekly pacing
-    /// heuristic — NO active-hours or morning-protection. Used for per-session
-    /// around-the-clock auto-resume (which should respect spend but not the
-    /// night window).
-    static func budgetAllows(usage: UsageSnapshot, config: PolicyConfig, now: Date) -> Decision {
+    static func shouldResume(usage: UsageSnapshot, config: PolicyConfig, now: Date) -> Decision {
+        let used = usage.sevenDay.utilization
+        let reset = resetPhrase(usage, now: now)
+        let afterReset = reset.map { " Resumes after the reset, \($0)." } ?? " Resumes after the weekly reset."
+
+        // A plan that still has a short window: respect it too.
         if let fiveHour = usage.fiveHour, fiveHour.utilization >= config.fiveHourCeiling {
             return Decision(
                 resume: false,
-                reason: "5-hour window: \(Int(fiveHour.utilization))% used, "
-                    + "past your \(Int(config.fiveHourCeiling))% stop"
+                reason: "5-hour window: \(Int(fiveHour.utilization))% used, past \(Int(config.fiveHourCeiling))%.",
+                state: .holding
             )
         }
 
-        if usage.sevenDay.utilization >= config.weeklyCeiling {
+        // At the real limit: nothing can run, and that's not a problem to fix.
+        // Waiting for the reset is the plan, said calmly.
+        if used >= 100 {
             return Decision(
                 resume: false,
-                reason: "This week: \(Int(usage.sevenDay.utilization))% used, "
-                    + "past your \(Int(config.weeklyCeiling))% stop"
+                reason: "Claude is at its weekly limit." + afterReset,
+                state: .waitingForReset
             )
         }
 
-        // Weekly pacing: hold if the week is being consumed faster than time
-        // is passing, with a safety margin protecting the next workdays.
-        let weekUsed = usage.sevenDay.utilization
+        if used >= config.weeklyCeiling {
+            return Decision(
+                resume: false,
+                reason: "\(Int(used))% used, past your \(Int(config.weeklyCeiling))% stop, "
+                    + "so the rest of the week stays yours." + afterReset,
+                state: .waitingForReset
+            )
+        }
+
+        // Pace: don't let unattended work get ahead of the week. At 70% with
+        // five days left, resuming now would leave you short on Thursday.
         let daysLeft = daysUntilWeeklyReset(usage, now: now)
         let elapsedPct = (1.0 - min(daysLeft, 7.0) / 7.0) * 100.0
-        let allowed = elapsedPct + config.pacingMargin
-        if weekUsed > allowed {
+        if used > elapsedPct + config.pacingMargin {
             return Decision(
                 resume: false,
-                reason: "Using the week too fast: \(Int(weekUsed))% used, "
-                    + String(format: "%.1f", daysLeft) + " days to reset"
+                reason: "Holding so the week lasts: \(Int(used))% used with "
+                    + String(format: "%.1f", daysLeft) + " days to go. "
+                    + "This lifts as the week catches up, or at the reset.",
+                state: .holding
             )
         }
 
+        let tail = reset.map { ", resets \($0)" } ?? ""
         return Decision(
             resume: true,
-            reason: "Room to spare: \(Int(weekUsed))% used this week, "
-                + String(format: "%.1f", daysLeft) + " days to reset",
+            reason: "Room to resume: \(Int(used))% used\(tail).",
             state: .resuming
         )
     }

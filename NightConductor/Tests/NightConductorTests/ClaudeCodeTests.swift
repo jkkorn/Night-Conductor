@@ -147,9 +147,16 @@ final class ClaudeCodeTests: XCTestCase {
         XCTAssertTrue(scan().isEmpty)
     }
 
-    // A genuinely old stall (beyond the 48h window) is ignored.
+    // A genuinely old stall (beyond the 8-day window) is ignored.
     func testOldStallBeyondWindowIgnored() throws {
-        try seed(uuid: "old", lines: [userLine(), errorAssistantAt("2026-06-10T10:00:00.000Z")])
+        try seed(uuid: "old", lines: [userLine(), errorAssistantAt("2026-06-05T10:00:00.000Z")])
         XCTAssertTrue(scan().isEmpty)
+    }
+
+    // Review #1: a stall from five days ago is still waiting for its weekly
+    // reset, so it must stay in the list.
+    func testFiveDayOldStallIsStillWaiting() throws {
+        try seed(uuid: "week", lines: [userLine(), errorAssistantAt("2026-06-10T10:00:00.000Z")])
+        XCTAssertEqual(scan().count, 1)
     }
 }

@@ -33,6 +33,24 @@ enum SafeFile {
         return try? Data(contentsOf: url)
     }
 
+    /// A reset time someone else wrote, kept only if it's plausible: not in
+    /// the past by more than a day, not further out than `horizon`. Anything
+    /// else (including 1e300) is dropped before it can reach an `Int(...)`.
+    static func plausibleReset(_ date: Date?, now: Date = Date(),
+                               horizon: TimeInterval = 31 * 86_400) -> Date? {
+        guard let date, date.timeIntervalSince1970.isFinite,
+              date >= now.addingTimeInterval(-86_400),
+              date <= now.addingTimeInterval(horizon) else { return nil }
+        return date
+    }
+
+    /// A reading time from another app: never in the future (that would
+    /// freeze the sample log, which rejects anything older than its last).
+    static func plausibleReadAt(_ date: Date?, now: Date = Date()) -> Date {
+        guard let date, date.timeIntervalSince1970.isFinite else { return now }
+        return min(date, now)
+    }
+
     static func clampPercent(_ value: Double) -> Double {
         value.isFinite ? min(100, max(0, value)) : 0
     }

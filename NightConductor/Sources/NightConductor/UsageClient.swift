@@ -34,10 +34,13 @@ enum UsageClient {
         var plan: String? = nil
     }
 
-    /// "Max 20x", "Max 5x", "Pro": the plan name as Claude shows it, from the
-    /// credential's `subscriptionType` / `rateLimitTier`. Display only.
+    /// The plan name as Claude shows it, from the credential's
+    /// `subscriptionType` / `rateLimitTier`. Display only. Claude's own usage
+    /// page now calls the 20x tier "Ultra"; other tiers keep the name we can
+    /// derive ("Max 5x", "Pro") until we've seen what Claude calls them.
     static func planLabel(subscriptionType: String?, rateLimitTier: String?) -> String? {
         guard let type = subscriptionType?.prefix(24), !type.isEmpty else { return nil }
+        if type == "max", rateLimitTier?.hasSuffix("max_20x") == true { return "Ultra" }
         if let tier = rateLimitTier,
            let range = tier.range(of: #"\d+x$"#, options: .regularExpression) {
             return "\(type.capitalized) \(tier[range])"
@@ -95,7 +98,7 @@ enum UsageClient {
         guard let dict = raw as? [String: Any] else {
             return UsageWindow(utilization: 0, resetsAt: nil)
         }
-        let utilization = (dict["utilization"] as? NSNumber)?.doubleValue ?? 0
+        let utilization = SafeFile.clampPercent((dict["utilization"] as? NSNumber)?.doubleValue ?? 0)
         let resetsAt = (dict["resets_at"] as? String).flatMap(ISO.parse)
         return UsageWindow(utilization: utilization, resetsAt: resetsAt)
     }
@@ -126,7 +129,7 @@ enum UsageClient {
 
         let (data, response): (Data, URLResponse)
         do {
-            (data, response) = try await URLSession.shared.data(for: request)
+            (data, response) = try await tokenSession.data(for: request)
         } catch {
             throw UsageError.network(error.localizedDescription)
         }
@@ -160,11 +163,23 @@ enum UsageClient {
                   let model = scope["model"] as? [String: Any],
                   let name = model["display_name"] as? String, !name.isEmpty
             else { continue }
-            let pct = (limit["percent"] as? NSNumber)?.doubleValue ?? 0
+            let pct = SafeFile.clampPercent((limit["percent"] as? NSNumber)?.doubleValue ?? 0)
             let resets = (limit["resets_at"] as? String).flatMap(ISO.parse)
             return ScopedWeekly(modelName: name,
                                 window: UsageWindow(utilization: pct, resetsAt: resets))
         }
         return nil
     }
+}
+
+/// The session that carries the OAuth token: no cache or cookies on disk, and
+/// it refuses to follow redirects, so the Authorization header can only ever
+/// go to the one host we addressed.
+private let tokenSession = URLSession(configuration: .ephemeral,
+                                      delegate: NoRedirects(), delegateQueue: nil)
+
+private final class NoRedirects: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest) async -> URLRequest? { nil }
 }

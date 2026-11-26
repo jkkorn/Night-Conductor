@@ -5,11 +5,15 @@ import SwiftUI
 /// Claude's own usage page says it. Never "left" or a bare number.
 enum UsageWording {
     static func used(_ percent: Double) -> String { "\(Int(percent.rounded()))% used" }
+    static func freeResets(_ count: Int) -> String {
+        count == 1 ? "1 free reset available" : "\(count) free resets available"
+    }
 }
 
 /// Where a provider's week is heading, said as one plain sentence.
 /// Always paired with an icon, so it never relies on color alone.
 enum PaceStatus: Equatable {
+    case atLimit
     case burningHot
     case runsOut(Date)
     case ahead
@@ -25,6 +29,8 @@ enum PaceStatus: Equatable {
         if usage.isResetSinceReading { return .resetSinceReading }
         // An old reading can't support a forecast; say it's old instead.
         if now.timeIntervalSince(usage.readAt) > UsageSummary.staleAfter { return .stale(usage.readAt) }
+        // Spent: forecasts and "ease off" are moot until the reset.
+        if usage.weekly.utilization >= 100 { return .atLimit }
         if a.isBurningHot { return .burningHot }
         if let runOut = a.runsOutAt { return .runsOut(runOut) }
         guard let even = a.evenPacePercent else { return .unknown }
@@ -48,6 +54,12 @@ enum PaceStatus: Equatable {
     func sentence(usage: ProviderUsage, assessment a: BurnAssessment, now: Date = Date()) -> String {
         let reset = usage.weekly.resetsAt.map { Self.possessiveDay($0, now: now) + " reset" } ?? "the reset"
         switch self {
+        case .atLimit:
+            guard let resets = usage.weekly.resetsAt, resets > now else {
+                return "At the weekly limit. It comes back at the reset."
+            }
+            return "At the weekly limit. It comes back "
+                + "\(resets.formatted(.dateTime.weekday(.wide).hour().minute())), \(ResetWatch.countdown(to: resets, now: now))."
         case .onPace:
             return "On track. You should reach \(reset) with room to spare."
         case .ahead:
@@ -80,6 +92,7 @@ enum PaceStatus: Equatable {
 
     var symbol: String {
         switch self {
+        case .atLimit: return "moon.stars.fill"
         case .burningHot: return "flame.fill"
         case .runsOut: return "exclamationmark.triangle.fill"
         case .ahead: return "hare.fill"
@@ -95,7 +108,7 @@ enum PaceStatus: Equatable {
     var warningTint: Color? {
         switch self {
         case .burningHot, .runsOut: return .red
-        case .ahead: return .orange
+        case .ahead, .atLimit: return .orange
         default: return nil
         }
     }
@@ -172,14 +185,10 @@ struct BudgetsSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Design.m) {
-            VStack(alignment: .leading, spacing: Design.xs) {
-                Text("Your usage").font(.headline)
-                Text(UsageSummary.headline(rows))
-                    .font(.callout).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .contentTransition(.opacity)
-            }
-            ForEach(rows, id: \.usage.provider) { row in
+            Text("Your usage").font(.headline)
+            UsageSummaryBanner(rows: rows)
+                .revealOnAppear(index: 0)
+            ForEach(Array(rows.enumerated()), id: \.element.usage.provider) { index, row in
                 let status = PaceStatus.of(row.usage, row.assessment)
                 let needsAttention = UsageSummary.urgency(status) >= 2 || status.isInformational
                     || UsageSummary.suggestsFreeReset(row.usage)
@@ -187,8 +196,10 @@ struct BudgetsSection: View {
                     ProviderBudgetRow(usage: row.usage, assessment: row.assessment,
                                       extras: row.usage.provider == .claude ? claudeExtras : [],
                                       onCollapse: needsAttention ? nil : { toggle(row.usage.provider) })
+                        .revealOnAppear(index: index + 1)
                 } else {
                     CompactBudgetRow(usage: row.usage) { toggle(row.usage.provider) }
+                        .revealOnAppear(index: index + 1)
                 }
             }
             if !state.otherAITools.isEmpty {
@@ -224,38 +235,6 @@ extension PaceStatus {
     }
 }
 
-/// One line for an account that's fine: icon, name, plan, % used, bar.
-struct CompactBudgetRow: View {
-    let usage: ProviderUsage
-    let onOpen: () -> Void
-
-    var body: some View {
-        Button(action: onOpen) {
-            VStack(alignment: .leading, spacing: Design.s) {
-                HStack(spacing: Design.m) {
-                    ProviderIcon(provider: usage.provider, size: 20)
-                    Text(usage.provider.displayName).font(.body).bold()
-                    if let plan = usage.plan {
-                        Text(plan).font(.callout).foregroundStyle(.secondary).lineLimit(1)
-                    }
-                    Spacer(minLength: Design.s)
-                    Text(UsageWording.used(usage.weekly.utilization))
-                        .font(.callout.monospacedDigit()).foregroundStyle(.secondary)
-                    Image(systemName: "chevron.right")
-                        .font(.caption).foregroundStyle(.tertiary)
-                }
-                BudgetBar(value: usage.weekly.utilization, tint: ProviderBrand.accent(usage.provider), height: 4)
-            }
-            .padding(.horizontal, Design.l).padding(.vertical, Design.m)
-            .background(.white.opacity(0.05), in: .rect(cornerRadius: Design.cardRadius))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("\(usage.provider.displayName): \(UsageWording.used(usage.weekly.utilization)) this week, on track")
-        .accessibilityHint("Shows details")
-    }
-}
-
 /// Laid out like Claude's own usage page: who and which plan, one sentence
 /// on where the week is heading, then "This week · X% used", the bar and
 /// when it resets.
@@ -267,6 +246,8 @@ struct ProviderBudgetRow: View {
     var now = Date()
 
     private var status: PaceStatus { .of(usage, assessment, now: now) }
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isStillRender) private var isStillRender
     private var pct: Double { usage.weekly.utilization }
     private var barTint: Color { status.warningTint ?? ProviderBrand.accent(usage.provider) }
     private var isStale: Bool { if case .stale = status { return true } else { return false } }
@@ -295,12 +276,18 @@ struct ProviderBudgetRow: View {
                 Text(status.sentence(usage: usage, assessment: assessment, now: now))
                     .fixedSize(horizontal: false, vertical: true)
             } icon: {
-                Image(systemName: status.symbol).foregroundStyle(status.warningTint ?? .secondary)
+                Image(systemName: status.symbol)
+                    .foregroundStyle(status.warningTint ?? .secondary)
+                    // The one ambient motion in the app, and only while you're
+                    // burning fast: a slow pulse that asks for attention.
+                    .symbolEffect(.pulse, options: .repeating,
+                                  isActive: status == .burningHot && !reduceMotion && !isStillRender)
             }
             .font(.callout)
 
             Group {
-                LimitRow(title: "This week", window: usage.weekly, tint: barTint, height: 6, showsReset: true)
+                LimitRow(title: "This week", window: usage.weekly, tint: barTint, height: 6, showsReset: false,
+                         isUnknown: usage.isResetSinceReading)
                 ForEach(extras, id: \.0) { name, window in
                     LimitRow(title: name, window: window, tint: ProviderBrand.accent(usage.provider), height: 4,
                              showsReset: UsageSummary.showsOwnReset(window.resetsAt, weekly: usage.weekly.resetsAt))
@@ -308,15 +295,9 @@ struct ProviderBudgetRow: View {
             }
             .opacity(isStale ? 0.55 : 1)
 
-            if UsageSummary.suggestsFreeReset(usage, now: now) {
-                Link(destination: UsageSummary.claudeUsagePage) {
-                    Label("Have a free limit reset? Open Claude usage", systemImage: "arrow.up.forward.app")
-                        .font(.callout)
-                }
-                .help("Claude's free resets live on claude.ai. Night Conductor can't see or use them for you.")
-            }
+            // Free resets live in the Resets card, said once and honestly.
         }
-        .glassCard()
+        .glassCard(tint: status.warningTint)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilitySummary)
     }
@@ -327,7 +308,8 @@ struct ProviderBudgetRow: View {
     }
 
     private var accessibilitySummary: String {
-        var text = "\(usage.provider.displayName): \(UsageWording.used(pct)) this week. "
+        let amount = usage.isResetSinceReading ? "no reading yet" : UsageWording.used(pct)
+        var text = "\(usage.provider.displayName): \(amount) this week. "
             + status.sentence(usage: usage, assessment: assessment, now: now)
         if let resets = usage.weekly.resetsAt {
             text += " Resets \(resets.formatted(.dateTime.weekday(.wide).hour().minute()))."
@@ -343,19 +325,27 @@ private struct LimitRow: View {
     let tint: Color
     var height: CGFloat
     var showsReset: Bool = true
+    /// The window reset after the last reading, so today's usage isn't
+    /// known. Say so, rather than presenting an assumed 0% as a fact.
+    var isUnknown: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Design.s) {
             HStack(alignment: .firstTextBaseline) {
                 Text(title).font(height > 5 ? .subheadline : .caption)
                 Spacer()
-                Text(UsageWording.used(window.utilization))
-                    .font((height > 5 ? Font.subheadline : .caption).monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .contentTransition(.numericText())
+                if isUnknown {
+                    Text("No reading yet").font(.callout).foregroundStyle(.secondary)
+                } else {
+                    UsedFigure(percent: window.utilization, font: height > 5 ? .title3 : .callout)
+                }
             }
-            BudgetBar(value: window.utilization, tint: tint, height: height)
-            if showsReset, let resets = window.resetsAt {
+            if isUnknown {
+                Capsule().fill(.quaternary).frame(height: height)   // the empty track, nothing to fill
+            } else {
+                GlowBar(value: window.utilization, tint: tint, height: height)
+            }
+            if showsReset, !isUnknown, let resets = window.resetsAt {
                 Text("Resets \(resets.formatted(.dateTime.weekday(.wide).hour().minute()))")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -363,30 +353,8 @@ private struct LimitRow: View {
     }
 }
 
-/// A plain usage bar: how much of this window is used.
-struct BudgetBar: View {
-    let value: Double
-    var tint: Color = .accentColor
-    var height: CGFloat = 6
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                Capsule().fill(.quaternary)
-                Capsule()
-                    .fill(tint.gradient)
-                    .frame(width: max(height, geo.size.width * min(max(value, 0), 100) / 100))
-                    .animation(reduceMotion ? nil : .spring(response: 0.6, dampingFraction: 0.85), value: value)
-            }
-        }
-        .frame(height: height)
-        .accessibilityHidden(true)
-    }
-}
-
 /// Three-way "how touchy are burn alerts" control. Built from plain buttons
-/// (like HourStepper) because AppKit-backed pickers trigger layout cycles in
+/// because AppKit-backed pickers trigger layout cycles in
 /// this popover's hosting context.
 struct SensitivityPicker: View {
     @Binding var selection: BurnSensitivity

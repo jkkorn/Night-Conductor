@@ -75,7 +75,7 @@ enum UIResumer {
                 return ResumeResult(ok: true, detail: "resumed inside Conductor")
             }
         }
-        return ResumeResult(ok: false, detail: "pressed Retry but session didn't start")
+        return ResumeResult(ok: false, detail: "pressed Retry but session didn't start", pressed: true)
     }
 
     // MARK: - Navigation
@@ -108,7 +108,8 @@ enum UIResumer {
         let strategies: [(String) -> Bool] = [
             { normalize($0) == workspace },
             { wordPrefix($0, workspace) },
-            { wordPrefix($0, title) },
+            // A title only identifies a session when it's distinctive.
+            { ResumeSafety.isDistinctiveTitle(session.title) && wordPrefix($0, title) },
         ]
         for matches in strategies {
             if let link = findElement(in: root, role: "AXLink", where: matches) {

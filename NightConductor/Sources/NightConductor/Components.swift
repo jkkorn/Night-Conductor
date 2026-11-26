@@ -7,36 +7,53 @@ extension View {
     /// opaque in offscreen snapshots and is unreliable inside a menu-bar
     /// popover), whereas this reads identically everywhere and stays crisp.
     func glassCard(cornerRadius: CGFloat = Design.cardRadius, tint: Color? = nil) -> some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        return self
-            .padding(Design.l)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background {
-                ZStack {
-                    shape.fill(.white.opacity(0.05))                 // frost
-                    if let tint { shape.fill(tint.opacity(0.14)) }   // status wash
-                    shape.fill(
-                        LinearGradient(                              // top-lit sheen
-                            colors: [.white.opacity(0.06), .clear],
-                            startPoint: .top, endPoint: .center
-                        )
-                    )
-                }
-            }
-            .overlay(shape.strokeBorder(.white.opacity(0.08), lineWidth: 0.5))
+        modifier(GlassCard(cornerRadius: cornerRadius, tint: tint))
     }
 
     /// A subtle lift + glow on hover, the macOS "this is alive" cue.
     func hoverLift() -> some View { modifier(HoverLift()) }
 }
 
+/// The frosted card: layered translucent fills, a top-lit sheen, a quiet
+/// gradient edge (accented only when the card carries a warning) and a soft
+/// drop shadow so it floats on the backdrop. Reduce Transparency swaps the
+/// see-through fills for a solid surface.
+private struct GlassCard: ViewModifier {
+    let cornerRadius: CGFloat
+    let tint: Color?
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius)
+        content
+            .padding(Design.l)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                ZStack {
+                    shape.fill(reduceTransparency ? Palette.dusk : .white.opacity(0.055))  // frost
+                    if let tint { shape.fill(tint.opacity(0.07)) }   // status wash: a hint, not a flood
+                    shape.fill(
+                        LinearGradient(                              // top-lit sheen
+                            colors: [.white.opacity(0.07), .clear],
+                            startPoint: .top, endPoint: .center
+                        )
+                    )
+                }
+                .shadow(color: .black.opacity(0.30), radius: 10, y: 5)
+            }
+            .gradientEdge(cornerRadius: cornerRadius, accent: tint)
+    }
+}
+
 private struct HoverLift: ViewModifier {
     @State private var hovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     func body(content: Content) -> some View {
         content
-            .scaleEffect(hovering ? 1.012 : 1.0)
-            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: hovering)
-            .onHover { hovering = $0 }
+            .scaleEffect(hovering && !reduceMotion ? 1.01 : 1.0)
+            .onHover { isHovering in
+                withAnimation(isHovering ? Motion.hoverIn : Motion.hoverOut) { hovering = isHovering }
+            }
     }
 }
 
@@ -67,45 +84,6 @@ struct UsageRing: View {
     }
 }
 
-/// Custom hour stepper — replaces AppKit `Stepper` (which triggers
-/// AttributeGraph layout cycles in this hosting context) with a crafted
-/// −/+ control that matches the night theme.
-struct HourStepper: View {
-    @Binding var hour: Int
-    var range: ClosedRange<Int> = 0...23
-
-    var body: some View {
-        HStack(spacing: Design.m) {
-            Text(String(format: "%02d:00", hour))
-                .font(.caption.monospacedDigit().weight(.semibold))
-                .frame(width: 46, alignment: .leading)
-                .contentTransition(.numericText())
-            HStack(spacing: 3) {
-                button("minus") { set(hour - 1) }
-                button("plus") { set(hour + 1) }
-            }
-        }
-    }
-
-    private func set(_ v: Int) {
-        withAnimation(.snappy(duration: 0.18)) {
-            hour = min(range.upperBound, max(range.lowerBound, v))
-        }
-    }
-
-    private func button(_ icon: String, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 9, weight: .bold))
-                .frame(width: 20, height: 18)
-                .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 5))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.primary.opacity(0.8))
-    }
-}
-
 /// Custom slider — replaces AppKit `Slider` (cycle source) with a draggable
 /// track + knob in the accent color, with a spring on tick changes.
 struct NightSlider: View {
@@ -113,6 +91,8 @@ struct NightSlider: View {
     var range: ClosedRange<Double>
     var step: Double
     var tint: Color = .indigo
+    var label: String = "Value"
+    var valueText: String? = nil
 
     var body: some View {
         GeometryReader { geo in
@@ -142,29 +122,45 @@ struct NightSlider: View {
             )
         }
         .frame(height: 18)
+        // A drag-only track is invisible to VoiceOver and the keyboard; expose
+        // it as a standard adjustable control that moves one step at a time.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityValue(valueText ?? "\(Int(value))")
+        .accessibilityAdjustableAction { direction in
+            let next = direction == .increment ? value + step : value - step
+            value = min(range.upperBound, max(range.lowerBound, next))
+        }
     }
 }
 
-/// The hero "Resume now" button: indigo glass, springy press, breathing glow.
+/// The hero "Resume now" button: violet glass with light on its top half,
+/// the app's one accented edge, a single light sweep when it first appears,
+/// and a quick squeeze on press.
 struct GlowButtonStyle: ButtonStyle {
     var disabled: Bool
     func makeBody(configuration: Configuration) -> some View {
+        let shape = RoundedRectangle(cornerRadius: Design.cardRadius)
         let base = disabled ? AnyShapeStyle(Color.gray.opacity(0.5))
-                            : AnyShapeStyle(Color.indigo.gradient)
+                            : AnyShapeStyle(LinearGradient(colors: [Palette.violetTop, Palette.violetBottom],
+                                                           startPoint: .top, endPoint: .bottom))
         configuration.label
-            .font(.body.weight(.semibold))
+            .font(.body).bold()
             .frame(maxWidth: .infinity)
-            .padding(.vertical, Design.m)
-            .background(base, in: RoundedRectangle(cornerRadius: Design.cardRadius, style: .continuous))
+            .padding(.vertical, Design.m + 2)
+            .background(base, in: shape)
+            .overlay {   // glass: light catching the top half
+                shape.fill(LinearGradient(colors: [.white.opacity(0.22), .clear],
+                                          startPoint: .top, endPoint: .center))
+                    .allowsHitTesting(false)
+            }
+            .overlay { if !disabled { SheenSweep().clipShape(shape) } }
             .foregroundStyle(.white)
-            .overlay(
-                RoundedRectangle(cornerRadius: Design.cardRadius, style: .continuous)
-                    .strokeBorder(.white.opacity(0.18), lineWidth: 0.5)
-            )
-            .scaleEffect(configuration.isPressed ? 0.975 : 1.0)
-            .shadow(color: .indigo.opacity(disabled ? 0 : 0.45),
+            .gradientEdge(accent: disabled ? nil : .white)
+            .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
+            .shadow(color: Palette.violetBottom.opacity(disabled ? 0 : 0.5),
                     radius: configuration.isPressed ? 5 : 12, y: 4)
-            .animation(.spring(response: 0.28, dampingFraction: 0.6), value: configuration.isPressed)
+            .animation(Motion.press, value: configuration.isPressed)
             .contentShape(Rectangle())
     }
 }

@@ -79,7 +79,7 @@ final class UsageLanguageTests: XCTestCase {
     }
 
     func testClaudePlanLabelFromCredential() {
-        XCTAssertEqual(UsageClient.planLabel(subscriptionType: "max", rateLimitTier: "default_claude_max_20x"), "Max 20x")
+        XCTAssertEqual(UsageClient.planLabel(subscriptionType: "max", rateLimitTier: "default_claude_max_20x"), "Ultra")
         XCTAssertEqual(UsageClient.planLabel(subscriptionType: "max", rateLimitTier: "default_claude_max_5x"), "Max 5x")
         XCTAssertEqual(UsageClient.planLabel(subscriptionType: "pro", rateLimitTier: nil), "Pro")
         XCTAssertNil(UsageClient.planLabel(subscriptionType: nil, rateLimitTier: nil))
@@ -88,7 +88,7 @@ final class UsageLanguageTests: XCTestCase {
     func testPolicyReasonsSayUsed() {
         let snap = UsageSnapshot(fiveHour: nil,
                                  sevenDay: UsageWindow(utilization: 95, resetsAt: reset), fetchedAt: now)
-        let d = Policy.budgetAllows(usage: snap, config: PolicyConfig(), now: now)
+        let d = Policy.shouldResume(usage: snap, config: PolicyConfig(), now: now)
         XCTAssertTrue(d.reason.contains("95% used"), d.reason)
     }
 }

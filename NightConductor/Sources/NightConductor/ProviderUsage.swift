@@ -40,6 +40,9 @@ struct ProviderUsage: Equatable, Identifiable, Sendable {
     var explicitStart: Date? = nil
     /// The reading predates a reset we've since passed (see `normalized`).
     var isResetSinceReading = false
+    /// Free full resets the account has been granted and not yet used.
+    /// Shown, never redeemed for you: spending one is your call.
+    var freeResetsAvailable = 0
 
     var id: ProviderID { provider }
 

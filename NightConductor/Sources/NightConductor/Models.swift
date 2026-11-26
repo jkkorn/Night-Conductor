@@ -16,7 +16,7 @@ struct UsageSnapshot: Equatable {
     var scopedWeekly: ScopedWeekly? = nil
     /// When the current weekly window opened, if the API says so.
     var weeklyStartedAt: Date? = nil
-    /// Plan name as Claude shows it ("Max 20x"), from the local credential.
+    /// Plan name as Claude shows it ("Ultra"), from the local credential.
     var plan: String? = nil
     let fetchedAt: Date
 }
@@ -75,6 +75,12 @@ enum SessionSource: String, Equatable {
 }
 
 struct StalledSession: Identifiable, Equatable {
+    /// How long a stall stays worth resuming. A weekly limit can be up to
+    /// seven days from its reset, so anything shorter would drop a Saturday
+    /// stall before Friday's reset frees it. A day of slack on top; older
+    /// than that it's abandoned, not waiting.
+    static let maxAge: TimeInterval = 8 * 86_400
+
     let sessionID: String
     let claudeSessionID: String
     let title: String
@@ -95,19 +101,29 @@ struct StalledSession: Identifiable, Equatable {
         claudeSessionID.isEmpty ? sessionID : claudeSessionID
     }
 
+    /// One specific stall of one session. Caps and cool-downs key on this,
+    /// so a session that stalls again next week gets a fresh try, while the
+    /// same stall can't be re-resumed every day.
+    var stallKey: String {
+        // Floored to the hour: two sources can stamp the same stall seconds
+        // apart, and must still share one budget.
+        guard let stalledAt else { return ledgerKey }
+        return "\(ledgerKey)@\(Int(stalledAt.timeIntervalSince1970 / 3600))"
+    }
+
     var workspaceName: String {
         (workspacePath as NSString).lastPathComponent
     }
 }
 
-/// Why the watch is (not) resuming, so the UI can speak in the right tone.
-/// Crucially, being off the night watch during the day is NOT a warning —
-/// it's the resting state — so it must not look like the budget-hold states.
+/// Why resuming is (not) happening, so the UI can speak in the right tone.
+/// Waiting for a reset is the normal resting state on a weekly plan, not a
+/// warning, so it must not look like a budget hold.
 enum DecisionState: Equatable {
-    case resuming    // green — clear to resume now
-    case standingBy  // calm — intentionally idle; you're at the helm, watch is off
-    case holding     // amber — on watch, but a budget/timing gate is holding
-    case checking    // neutral — usage not known yet
+    case resuming         // green: clear to resume now
+    case waitingForReset  // calm: at the limit or your stop line; the reset frees it
+    case holding          // amber: a pace gate is holding mid-week
+    case checking         // neutral: usage not known yet
 }
 
 struct Decision: Equatable {
@@ -117,13 +133,12 @@ struct Decision: Equatable {
 }
 
 struct PolicyConfig {
-    var startHour: Int = 23
-    var endHour: Int = 7
+    /// Only applies to a plan that still reports a 5-hour window. Not a setting.
     var fiveHourCeiling: Double = 85
     var weeklyCeiling: Double = 90
     var pacingMargin: Double = 15
     var maxResumesPerSession: Int = 3
-    var maxSessionsPerNight: Int = 10
+    var maxResumesPerDay: Int = 10
     var permissionMode: String = "acceptEdits"
     var resumePrompt: String =
         "Continue where you left off. Finish the task you were working on. "
@@ -131,10 +146,9 @@ struct PolicyConfig {
 
     static func fromDefaults(_ d: UserDefaults = .standard) -> PolicyConfig {
         var c = PolicyConfig()
-        if d.object(forKey: "startHour") != nil { c.startHour = d.integer(forKey: "startHour") }
-        if d.object(forKey: "endHour") != nil { c.endHour = d.integer(forKey: "endHour") }
-        if d.object(forKey: "fiveHourCeiling") != nil { c.fiveHourCeiling = d.double(forKey: "fiveHourCeiling") }
-        if d.object(forKey: "weeklyCeiling") != nil { c.weeklyCeiling = d.double(forKey: "weeklyCeiling") }
+        if d.object(forKey: "weeklyCeiling") != nil {
+            c.weeklyCeiling = min(100, max(50, d.double(forKey: "weeklyCeiling")))
+        }
         return c
     }
 }

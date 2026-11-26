@@ -6,13 +6,16 @@ import SwiftUI
 /// Uses representative demo data so real session titles never ship.
 @MainActor
 enum Screenshotter {
-    static func render(to path: String, showSettings: Bool, state stateName: String = "default", hour: Double = 23) {
+    /// `light` renders the way a Mac in Light mode sees the popover, so a
+    /// dark-only assumption can't hide behind dark-only docs.
+    static func render(to path: String, showSettings: Bool, state stateName: String = "default",
+                       hour: Double = 23, light: Bool = false) {
         // ImageRenderer can't draw NSView-backed controls (Toggle, Stepper,
         // Slider), so render in a real off-to-the-side window and snapshot
         // the view hierarchy instead — that draws everything.
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
-        app.appearance = NSAppearance(named: .darkAqua)
+        app.appearance = NSAppearance(named: light ? .aqua : .darkAqua)
         app.finishLaunching()
 
         NightSkyView.hourOverride = hour // docs default to night (23)
@@ -22,12 +25,12 @@ enum Screenshotter {
         let previousArmed = UserDefaults.standard.object(forKey: "armed")
         defer { UserDefaults.standard.set(previousArmed, forKey: "armed") }
         let state = demoState(stateName)
-        let root = MenuView(showSettings: showSettings, showActivity: stateName == "activity")
+        let root = MenuView(showSettings: showSettings)
             .environmentObject(state)
             .frame(width: 340)
             .fixedSize(horizontal: false, vertical: true)
-            .background(Color(red: 0.12, green: 0.12, blue: 0.14))
-            .environment(\.colorScheme, .dark)
+            .environment(\.colorScheme, light ? .light : .dark)
+            .environment(\.isStillRender, true)
         renderHosting(AnyView(root), to: path)
     }
 
@@ -109,10 +112,22 @@ enum Screenshotter {
         print("Wrote \(path)")
     }
 
+    /// Demo readings for the share card render (never real account data).
+    static func demoProviders(now: Date = Date()) -> [ProviderUsage] {
+        [
+            ProviderUsage(provider: .claude, source: "Claude Code", plan: "Ultra",
+                          weekly: UsageWindow(utilization: 69, resetsAt: now.addingTimeInterval(86_400)), readAt: now),
+            ProviderUsage(provider: .chatgpt, source: "ChatGPT account", plan: "Pro",
+                          weekly: UsageWindow(utilization: 77, resetsAt: now.addingTimeInterval(4 * 86_400)), readAt: now),
+            ProviderUsage(provider: .grok, source: "Grok Bot", plan: "Grok Bot Plan",
+                          weekly: UsageWindow(utilization: 16, resetsAt: now.addingTimeInterval(5 * 86_400)), readAt: now),
+        ]
+    }
+
     private static func demoState(_ name: String = "default") -> AppState {
         // Per-state knobs so we can audit every visual state as a still.
         let armed = name != "paused"
-        let weekly = name == "high" ? 76.0 : 29.0
+        let weekly = name == "high" ? 76.0 : (name == "waiting" ? 100.0 : 29.0)
         UserDefaults.standard.set(armed, forKey: "armed")
 
         let state = AppState(forScreenshots: true)
@@ -125,18 +140,25 @@ enum Screenshotter {
                 modelName: "Fable",
                 window: UsageWindow(utilization: 41, resetsAt: now.addingTimeInterval(3.4 * 86_400))
             ),
-            plan: "Max 20x",
+            plan: "Ultra",
             fetchedAt: now
         )
         let claude = ProviderUsage.claude(from: state.usage!)
-        let chatgpt = ProviderUsage(provider: .chatgpt, source: "Codex", plan: "Pro",
+        var chatgpt = ProviderUsage(provider: .chatgpt, source: "Codex", plan: "Pro",
                                     weekly: UsageWindow(utilization: name == "high" ? 71 : 26,
                                                         resetsAt: now.addingTimeInterval(5.1 * 86_400)),
                                     readAt: now.addingTimeInterval(-120))
+        chatgpt.freeResetsAvailable = 1
         let grok = ProviderUsage(provider: .grok, source: "Grok Bot", plan: "Grok Bot Plan",
                                  weekly: UsageWindow(utilization: 52, resetsAt: now.addingTimeInterval(1.8 * 86_400)),
                                  readAt: now.addingTimeInterval(-2 * 86_400))
-        state.providers = [claude, chatgpt, grok]
+        // "reset": the Codex reading predates its weekly reset (the case a
+        // real Mac hit when Codex hadn't run since the reset).
+        state.providers = name == "reset"
+            ? [claude, ProviderUsage(provider: .chatgpt, source: "Codex", plan: "Pro",
+                                     weekly: UsageWindow(utilization: 94, resetsAt: now.addingTimeInterval(-4 * 86_400)),
+                                     readAt: now.addingTimeInterval(-5 * 86_400)).normalized(now: now), grok]
+            : [claude, chatgpt, grok]
         state.assessments = [
             .claude: BurnAssessment(evenPacePercent: 77, runsOutAt: nil, recentRate: name == "high" ? 9 : 2, usualRate: 3,
                                     isBurningHot: name == "high"),
@@ -146,9 +168,8 @@ enum Screenshotter {
             .grok: BurnAssessment(evenPacePercent: 74, runsOutAt: nil, recentRate: nil, usualRate: nil,
                                   isBurningHot: false),
         ]
-        state.decision = name == "high"
-            ? Decision(resume: false, reason: "Using the week too fast: 76% used, 1.6 days to reset", state: .holding)
-            : Decision(resume: true, reason: "Room to spare: 29% used this week, 1.6 days to reset", state: .resuming)
+        // The real policy, on the demo reading, so the docs say what the app says.
+        state.decision = Policy.shouldResume(usage: state.usage!, config: PolicyConfig(), now: now)
         let base = [
             StalledSession(
                 sessionID: "demo-1", claudeSessionID: "demo-1",

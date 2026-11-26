@@ -58,14 +58,16 @@ enum ClaudeDesktopResumer {
                 return ResumeResult(ok: true, detail: "resumed inside Claude Desktop")
             }
         }
-        return ResumeResult(ok: false, detail: "pressed Retry but session didn't resume")
+        return ResumeResult(ok: false, detail: "pressed Retry but session didn't resume", pressed: true)
     }
 
     // MARK: - AX helpers
 
     private static func matchesTitle(_ label: String, _ title: String) -> Bool {
         let l = normalize(label)
-        return !title.isEmpty && (l == title || l.hasPrefix(title) || l.contains(title))
+        // Exact, or the title followed by a word break. Never "contains": a
+        // short title would match some other session's button.
+        return ResumeSafety.isDistinctiveTitle(title) && (l == title || l.hasPrefix(title + " "))
     }
 
     private static func normalize(_ s: String) -> String {

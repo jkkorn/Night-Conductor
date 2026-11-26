@@ -3,10 +3,12 @@ import SwiftUI
 
 /// Orchestrates two independent loops:
 ///   • a fast **view loop** that refreshes the displayed usage and stalled
-///     list every `scanInterval` — the local DB scan is essentially free,
-///     so the list never shows sessions that already recovered, and
-///   • a slower **resume loop** that, when armed + in-hours + budget-safe,
-///     resumes stalled sessions one at a time, re-checking budget after each.
+///     list every `scanInterval` (the local DB scan is essentially free, so
+///     the list never shows sessions that already recovered), and
+///   • a slower **resume loop** that, when auto-resume is on and the week has
+///     room, resumes stalled sessions one at a time, re-checking after each.
+/// There is no night window: a session stalled on a weekly limit can run
+/// again the moment the week resets, at whatever hour that is.
 @MainActor
 final class AppState: ObservableObject {
     @Published var usage: UsageSnapshot?
@@ -33,8 +35,8 @@ final class AppState: ObservableObject {
     static let usageRefreshInterval: TimeInterval = 180   // 3 min
     static let usageStaleAfter: TimeInterval = 900        // 15 min → treat as unavailable
     static let maxAttemptsPerPass = 8                     // bound a pass when sessions fail
-    static let transientCooldown: TimeInterval = 300      // 5 min before retrying a server rate-limit
-    static let resumeCooldown: TimeInterval = 600         // 10 min before re-firing the SAME session
+    nonisolated static let transientCooldown: TimeInterval = 300      // 5 min before retrying a server rate-limit
+    nonisolated static let resumeCooldown: TimeInterval = 600         // 10 min before re-firing the SAME session
     static let minUsageAttemptGap: TimeInterval = 20      // floor between /usage calls, even forced ones
 
     private var viewLoop: Task<Void, Never>?
@@ -45,14 +47,13 @@ final class AppState: ObservableObject {
     private var usageBackoffStep = 0
     private var usageJitter: Double = 0     // randomized offset so polls desync
     private var signInExpired = false       // Claude Code token expired → tell the user
-    private var lastInWindow: Bool?
     private var lastKeepAwake = false  // last computed keep-awake state, to log real transitions
     private var lastClaudeCodeScan: Date?
     private var cachedClaudeCode: [StalledSession] = []
     private var lastResumedAt: [String: Date] = [:]  // ledgerKey -> last resume, to space re-fires
     // Guards against the resume loop and the manual "Resume now" button
     // running a resume pass at the same time (which could double-run a
-    // session and bypass the per-night caps).
+    // session and bypass the daily caps).
     private var isResuming = false
     let isScreenshot: Bool  // true → inert demo state; never hit the live API
     var screenshotSetup: String?  // demo-only: force the setup card in the design render
@@ -61,12 +62,7 @@ final class AppState: ObservableObject {
         isScreenshot = forScreenshots
         UserDefaults.standard.register(defaults: [
             "armed": true,
-            "startHour": 23,
-            "endHour": 7,
-            "fiveHourCeiling": 85.0,
             "weeklyCeiling": 90.0,
-            "resumePaceMinutes": 10.0,
-            "aroundTheClock": false,
         ])
         if forScreenshots { return } // inert state; data injected by caller
         usageJitter = Double(Int.random(in: 0...45)) // desync the very first poll too
@@ -81,18 +77,13 @@ final class AppState: ObservableObject {
             objectWillChange.send()
             UserDefaults.standard.set(newValue, forKey: "armed")
             if newValue {
-                Notifications.requestAuthorizationIfNeeded() // for the morning summary
+                Notifications.requestAuthorizationIfNeeded() // for the "resumed" note
             } else {
                 PowerManager.preventIdleSleep(false) // let it sleep
             }
-            log(newValue ? "Night watch armed" : "Night watch disarmed")
+            log(newValue ? "Auto-resume on" : "Auto-resume paused")
         }
     }
-
-    /// When on, the watch resumes whenever there's budget (not just the night
-    /// window) and keeps the Mac awake while armed, so it's always ready to
-    /// resume the moment your limit resets, any time of day.
-    var aroundTheClock: Bool { UserDefaults.standard.bool(forKey: "aroundTheClock") }
 
     func start() {
         viewLoop?.cancel()
@@ -106,10 +97,6 @@ final class AppState: ObservableObject {
             PowerLog.closeOpenSpan(lastAlive: lastAlive)
             HoldLog.closeOpenSpan(lastAlive: lastAlive)
         }
-        // If the Mac slept or the app was not running when last night's window
-        // closed, the live edge that posts the morning summary was never seen.
-        // Catch it up now (idempotent via lastSummaryNight).
-        catchUpMorningSummary(config: PolicyConfig.fromDefaults())
         Task { [weak self] in await self?.refreshUsage(force: true) } // populate meters once at launch
         Task { [weak self] in await self?.checkForUpdates() }         // notify if a newer release exists
         viewLoop = Task { [weak self] in
@@ -120,11 +107,9 @@ final class AppState: ObservableObject {
         }
         resumeLoop = Task { [weak self] in
             while !Task.isCancelled {
-                // Jittered gap between resume attempts so the night's resumes
-                // spread out (and don't sync to a robotic beat). Pace is the
-                // user's setting (clamped); jitter is +/-40%.
-                let pace = Self.paceSeconds(UserDefaults.standard.object(forKey: "resumePaceMinutes") as? Double)
-                let gap = pace * Double.random(in: 0.6...1.4)
+                // Jittered gap between resume attempts so resumes after a
+                // reset spread out (and don't sync to a robotic beat).
+                let gap = Self.paceSeconds(nil) * Double.random(in: 0.6...1.4)
                 try? await Task.sleep(for: .seconds(gap))
                 await self?.resumeTick()
             }
@@ -162,24 +147,38 @@ final class AppState: ObservableObject {
     @discardableResult
     func refreshView() async -> Bool {
         let config = PolicyConfig.fromDefaults()
-        let inWindow = Policy.inActiveHours(
-            hour: Calendar.current.component(.hour, from: Date()),
-            start: config.startHour, end: config.endHour
-        )
-        // Around-the-clock keeps the Mac awake whenever armed, so it's ready to
-        // resume the instant a limit resets; otherwise only during the window.
-        let keepAwake = armed && (aroundTheClock || inWindow)
+        UserDefaults.standard.set(Date(), forKey: "lastHeartbeat") // liveness proof
+        stalled = await combinedStalled()
+        await refreshBudgets()
+        lastTick = Date()
+        let fresh = recomputeDecision(config: config)
+
+        // Hold the Mac awake only around a reset that stalled work is waiting
+        // for, or while that work is actually being resumed. Not all week.
+        let waiting = waitingCount(config: config)
+        let keepAwake = !signInExpired && ResetWatch.shouldKeepAwake(
+            armed: armed, waiting: waiting, budgetAllows: fresh && decision?.resume == true,
+            nextReset: usage?.sevenDay.resetsAt, now: Date())
         if keepAwake != lastKeepAwake {
             PowerLog.record(awake: keepAwake) // durable proof of when we held the Mac awake
             lastKeepAwake = keepAwake
         }
         PowerManager.preventIdleSleep(keepAwake)
-        UserDefaults.standard.set(Date(), forKey: "lastHeartbeat") // liveness proof
-        checkMorningSummary(inWindow: inWindow, config: config)
-        stalled = await combinedStalled()
-        await refreshBudgets()
-        lastTick = Date()
-        return recomputeDecision(config: config)
+        // "Done for now": nothing left to try, or the week says stop. Either
+        // way, report what the unattended loop already did.
+        postResumeSummaryIfDone(done: waiting == 0 || !(fresh && decision?.resume == true))
+        return fresh
+    }
+
+    /// Stalled sessions the unattended loop would still try today (not over
+    /// the per-session or per-day caps). Zero means nothing is waiting on us.
+    func waitingCount(config: PolicyConfig) -> Int {
+        let ledger = ResumeLedger.load()
+        guard ledger.total < config.maxResumesPerDay else { return 0 }
+        return stalled.filter {
+            ledger.count(for: $0.stallKey) < config.maxResumesPerSession
+                && ledger.failureCount(for: $0.stallKey) < config.maxResumesPerSession
+        }.count
     }
 
     /// Check GitHub Releases for a newer version. Throttled to once every 6h
@@ -244,7 +243,7 @@ final class AppState: ObservableObject {
 
     /// Whether to attempt a usage fetch. The 429 backoff throttles polling of
     /// data we ALREADY have fresh, but must never strand us on a stale reading:
-    /// a stale "you're maxed" value makes us hold all night when there's really
+    /// a stale "you're maxed" value makes us hold for hours when there's really
     /// headroom (max backoff is 30m, staleness is 15m, so a backoff alone
     /// guarantees such a window). Once the cached data is stale, always retry.
     nonisolated static func shouldFetchUsage(
@@ -260,37 +259,34 @@ final class AppState: ObservableObject {
         // .greatestFiniteMagnitude, so it stays exempt and the meters populate.
         if attemptAge < minAttemptGap { return false }
         // The 429 backoff throttles polling, but must never strand us on a STALE
-        // reading (a stale "you're maxed" value would hold all night). So it
+        // reading (a stale "you're maxed" value would hold for hours). So it
         // blocks when the data is fresh OR when we have no reading at all, and
         // stands down only to recover a stale one.
         let blockedByBackoff = inBackoff && (fresh || !hasUsage)
         return !blockedByBackoff && (force || !hasUsage || age > threshold)
     }
 
-    /// Seconds between resume attempts from the user's "resume pace" setting,
-    /// clamped to a sane 5 to 20 minute range (jitter is added at the call site).
+    /// Seconds between unattended resume attempts, clamped to a sane 5 to 20
+    /// minute range (jitter is added at the call site). Default 10 minutes.
     nonisolated static func paceSeconds(_ minutes: Double?) -> TimeInterval {
         min(20, max(5, minutes ?? 10)) * 60
     }
 
     /// Stop a resume pass after a success only when it's NOT manual: an auto
-    /// pass resumes one session per tick to spread the night's work, while a
+    /// pass resumes one session per tick to spread the work out, while a
     /// manual "Resume now" resumes the whole list.
     nonisolated static func shouldStopPass(manual: Bool, handedToApp: Bool, resultOK: Bool) -> Bool {
         !manual && (handedToApp || resultOK)
     }
 
-    /// Whether the auto loop should resume this session now. Pinned sessions run
-    /// around the clock; the rest only inside the night window (`nightOK`). A
-    /// session stalled on a TRANSIENT server rate-limit ("temporarily limiting
-    /// requests") gets a cool-down first, so the loop never bounces straight
-    /// back into the same limit and re-triggers it. Manual "Resume now" skips
-    /// this (it doesn't run through here).
+    /// Whether the auto loop should resume this session now (the budget gate
+    /// is checked by the caller). A session stalled on a TRANSIENT server
+    /// rate-limit ("temporarily limiting requests") gets a cool-down first, so
+    /// the loop never bounces straight back into the same limit. Manual
+    /// "Resume now" skips this (it doesn't run through here).
     nonisolated static func autoResumeEligible(
-        _ session: StalledSession, nightOK: Bool, pins: Set<String>, now: Date,
-        lastResumedAt: Date? = nil
+        _ session: StalledSession, now: Date, lastResumedAt: Date? = nil
     ) -> Bool {
-        guard nightOK || pins.contains(session.claudeSessionID) else { return false }
         if session.kind == .transient, let at = session.stalledAt,
            now.timeIntervalSince(at) < transientCooldown { return false }
         // Don't re-fire the SAME session too soon. A headless resume doesn't
@@ -309,12 +305,10 @@ final class AppState: ObservableObject {
     private func recomputeDecision(config: PolicyConfig) -> Bool {
         let now = Date()
         if let snapshot = usage, usageIsFresh(now) {
-            let result = Policy.shouldResume(
-                usage: snapshot, config: config, now: now, ignoreActiveHours: false
-            )
+            let result = Policy.shouldResume(usage: snapshot, config: config, now: now)
             decision = result
-            // .standingBy is the intentional daytime rest, not a problem — only
-            // .holding is worth a durable record of "resume was blocked, and why."
+            // Waiting for the reset is the normal rest on a weekly plan, not a
+            // problem; only a mid-week .holding is worth a durable "why" record.
             HoldLog.record(reason: (!result.resume && result.state == .holding) ? result.reason : "")
             return true
         }
@@ -329,7 +323,7 @@ final class AppState: ObservableObject {
         decision = Decision(resume: false, reason: reason, state: .checking)
         // Unlike .holding above, .checking here can be a brief, normal blip (a
         // fetch in flight) or the exact multi-hour failure this log exists to
-        // catch (e.g. a sign-in that stayed expired all night). Recording it
+        // catch (e.g. a sign-in that stayed expired for hours). Recording it
         // is harmless either way: HoldLog dedupes unchanged reasons, so a
         // fast-clearing blip collapses to one short-lived entry.
         HoldLog.record(reason: reason)
@@ -344,16 +338,12 @@ final class AppState: ObservableObject {
         guard armed, let usage else { return }
         let config = PolicyConfig.fromDefaults()
         let now = Date()
-        // Never overspend. But resume PINNED sessions around the clock, and
-        // every stalled session during the night window.
-        guard Policy.budgetAllows(usage: usage, config: config, now: now).resume else { return }
-        // Around-the-clock resumes whenever budget allows (the guard above),
-        // bypassing the night window. Otherwise only inside the watch window.
-        let nightOK = aroundTheClock || Policy.shouldResume(usage: usage, config: config, now: now).resume
-        let pins = pinnedIDs
+        // Never overspend: the week must have room (stop line + pace).
+        guard Policy.shouldResume(usage: usage, config: config, now: now).resume else { return }
+        let ledger = ResumeLedger.load(now: now)
         let eligible = stalled.filter {
-            Self.autoResumeEligible($0, nightOK: nightOK, pins: pins, now: now,
-                                    lastResumedAt: lastResumedAt[$0.ledgerKey])
+            Self.autoResumeEligible($0, now: now,
+                                    lastResumedAt: ledger.lastResumed[$0.stallKey] ?? lastResumedAt[$0.ledgerKey])
         }
         guard !eligible.isEmpty else { return }
         await resumeStalledSessions(sessions: eligible, config: config, manual: false)
@@ -376,30 +366,6 @@ final class AppState: ObservableObject {
     var uiResumeEnabled: Bool {
         UserDefaults.standard.object(forKey: "uiResume") == nil
             || UserDefaults.standard.bool(forKey: "uiResume")
-    }
-
-    // MARK: - Per-session auto-resume pins
-
-    // Pinned sessions auto-resume around the clock (budget permitting), not
-    // just during the night window — so the day's stalls aren't stuck waiting.
-    private let pinnedKey = "pinnedSessions"
-
-    var pinnedIDs: Set<String> {
-        Set(UserDefaults.standard.stringArray(forKey: pinnedKey) ?? [])
-    }
-
-    func isPinned(_ session: StalledSession) -> Bool {
-        pinnedIDs.contains(session.claudeSessionID)
-    }
-
-    func togglePin(_ session: StalledSession) {
-        objectWillChange.send()
-        var ids = pinnedIDs
-        let nowPinned = !ids.contains(session.claudeSessionID)
-        if nowPinned { ids.insert(session.claudeSessionID) }
-        else { ids.remove(session.claudeSessionID) }
-        UserDefaults.standard.set(Array(ids), forKey: pinnedKey)
-        log(nowPinned ? "📌 Auto-resume on: \(session.title)" : "Auto-resume off: \(session.title)")
     }
 
     private func resumeStalledSessions(
@@ -426,23 +392,23 @@ final class AppState: ObservableObject {
             resolvedClaudePath = .some(found)
             return found
         }
-        var night = NightLedger.load(startHour: config.startHour)
+        var ledger = ResumeLedger.load()
         var attemptsThisPass = 0 // bound a pass when many sessions fail in a row
 
         for session in sessions {
-            // Per-night caps protect the unattended loop; a manual click is
-            // your explicit call, so it bypasses them.
+            // Daily caps protect the unattended loop; a manual click is your
+            // explicit call, so it bypasses them.
             if !manual {
-                guard night.total < config.maxSessionsPerNight else {
-                    log("Nightly cap reached (\(config.maxSessionsPerNight) resumes)")
+                guard ledger.total < config.maxResumesPerDay else {
+                    log("Daily cap reached (\(config.maxResumesPerDay) resumes)")
                     break
                 }
                 guard attemptsThisPass < Self.maxAttemptsPerPass else { break } // try again next tick
-                guard night.count(for: session.ledgerKey) < config.maxResumesPerSession else {
-                    continue // already resumed this one enough tonight
+                guard ledger.count(for: session.stallKey) < config.maxResumesPerSession else {
+                    continue // this stall has had its tries
                 }
-                guard night.failureCount(for: session.ledgerKey) < config.maxResumesPerSession else {
-                    continue // keeps failing tonight — stop hammering it
+                guard ledger.failureCount(for: session.stallKey) < config.maxResumesPerSession else {
+                    continue // keeps failing: stop hammering it
                 }
             }
             attemptsThisPass += 1
@@ -471,10 +437,12 @@ final class AppState: ObservableObject {
                     }.value
                     handedToApp = result.ok
                     if !result.ok {
-                        log("↻ UI resume failed (\(result.detail)), falling back to headless")
+                        log(result.pressed
+                            ? "↻ pressed Retry, not confirmed yet (\(result.detail)); no headless fallback"
+                            : "↻ UI resume failed (\(result.detail)), falling back to headless")
                     }
                 }
-                if !result.ok, let claudePath = await claudeBinary() {
+                if !result.ok, !result.pressed, let claudePath = await claudeBinary() {
                     result = await Task.detached(priority: .utility) {
                         Resumer.resume(session: session, claudePath: claudePath, config: config)
                     }.value
@@ -498,9 +466,9 @@ final class AppState: ObservableObject {
             }
 
             // A manual click bypasses the cap CHECK, so it must not spend the
-            // cap BUDGET either — the nightly ledger exists to bound the
+            // cap BUDGET either: the daily ledger exists to bound the
             // UNATTENDED loop, not your explicit choices. Manual still logs to
-            // history (for the activity log / stat card).
+            // history.
             if result.ok {
                 lastResumedAt[session.ledgerKey] = Date() // space out re-firing this session
                 ResumeHistory.record(ResumeEvent(
@@ -510,17 +478,19 @@ final class AppState: ObservableObject {
                 ))
             }
             if !manual {
-                // Only a SUCCESS spends the night's budget. A failure is tracked
-                // separately so a transient blip can't burn the per-night /
-                // per-session caps and disable the whole night's watch.
-                night = result.ok
-                    ? night.recordingSuccess(session.ledgerKey)
-                    : night.recordingFailure(session.ledgerKey)
-                night.save()
+                // Only a SUCCESS spends the day's budget. A failure is tracked
+                // separately so a transient blip can't burn the caps.
+                ledger = result.ok
+                    ? ledger.recordingSuccess(session.stallKey)
+                    : ledger.recordingFailure(session.stallKey)
+                ledger.save()
+                if result.ok {
+                    ResumeSummary.recordUnattended(key: session.ledgerKey, title: session.title, inApp: handedToApp)
+                }
             }
 
             // Spread it out: an AUTO pass resumes ONE session per tick so the
-            // night's budget trickles out instead of bursting; the next tick
+            // budget trickles out instead of bursting; the next tick
             // takes the next session. A MANUAL pass ("Resume now") keeps going
             // through the whole list, so clicking it resumes everything.
             if Self.shouldStopPass(manual: manual, handedToApp: handedToApp, resultOK: result.ok) {
@@ -534,60 +504,14 @@ final class AppState: ObservableObject {
         stalled = await combinedStalled()
     }
 
-    /// When the watch window ends (the user's wake hour), post one morning
-    /// summary if anything was resumed overnight — at most once per night.
-    private func checkMorningSummary(inWindow: Bool, config: PolicyConfig) {
-        defer { lastInWindow = inWindow }
-        guard let was = lastInWindow, was, !inWindow else { return } // just ended
-        let nightKey = NightLedger.currentKey(startHour: config.startHour)
-        guard UserDefaults.standard.string(forKey: "lastSummaryNight") != nightKey else { return }
-        let count = NightLedger.load(startHour: config.startHour).total
-        UserDefaults.standard.set(nightKey, forKey: "lastSummaryNight")
-        guard count > 0 else { return }
-        let latest = ResumeHistory.load().sorted { $0.date > $1.date }.first?.title
-        let background = ResumeHistory.backgroundCount(within: 12 * 3600)
-        Notifications.postMorningSummary(count: count, sampleTitle: latest, backgroundCount: background)
-        log("🌅 Good morning, \(count) resumed overnight")
-    }
-
-    /// The live `checkMorningSummary` is edge-triggered: it fires only when the
-    /// app is running and observes the window close. If the Mac slept or the app
-    /// was not up at that moment, the summary is lost. This level-triggered
-    /// catch-up runs once at launch: if we are past a night that had resumes and
-    /// has not been summarized, post it now. Shares `lastSummaryNight` with the
-    /// live path, so the two can never double-post.
-    private func catchUpMorningSummary(config: PolicyConfig) {
-        let now = Date()
-        let inWindow = Policy.inActiveHours(
-            hour: Calendar.current.component(.hour, from: now),
-            start: config.startHour, end: config.endHour
-        )
-        let nightKey = NightLedger.currentKey(startHour: config.startHour)
-        let total = NightLedger.load(startHour: config.startHour).total
-        let action = Self.morningCatchUp(
-            inWindow: inWindow,
-            lastSummaryNight: UserDefaults.standard.string(forKey: "lastSummaryNight"),
-            nightKey: nightKey, total: total
-        )
-        guard action.mark else { return }
-        UserDefaults.standard.set(nightKey, forKey: "lastSummaryNight")
-        lastInWindow = inWindow // seed the live edge detector so it agrees
-        guard action.post else { return }
-        let latest = ResumeHistory.load().sorted { $0.date > $1.date }.first?.title
-        let background = ResumeHistory.backgroundCount(within: 12 * 3600)
-        Notifications.postMorningSummary(count: total, sampleTitle: latest, backgroundCount: background)
-        log("🌅 Good morning, \(total) resumed overnight")
-    }
-
-    /// Pure decision for the launch-time catch-up. `mark` records the night as
-    /// handled (so we stop re-checking, even a zero-resume night — mirroring the
-    /// live path); `post` actually shows the summary, only when something was
-    /// resumed and we are past the window.
-    nonisolated static func morningCatchUp(
-        inWindow: Bool, lastSummaryNight: String?, nightKey: String, total: Int
-    ) -> (mark: Bool, post: Bool) {
-        guard !inWindow, lastSummaryNight != nightKey else { return (false, false) }
-        return (mark: true, post: total > 0)
+    /// Once nothing is left waiting, tell the user what the unattended loop
+    /// did since the last note: one notification per run of resumes, not one
+    /// per session.
+    private func postResumeSummaryIfDone(done: Bool) {
+        guard done, !isResuming, let summary = ResumeSummary.takeIfAny() else { return }
+        Notifications.postResumeSummary(count: summary.count, sampleTitle: summary.title,
+                                        backgroundCount: summary.background)
+        log("Resumed \(summary.count) stalled session\(summary.count == 1 ? "" : "s")")
     }
 
     func log(_ message: String) {
@@ -597,64 +521,118 @@ final class AppState: ObservableObject {
     }
 }
 
-/// Per-night ledger, persisted so relaunching can't bypass the caps. A
-/// "night" is keyed by the date its active window started. Successes and
-/// failures are tracked separately: successes gate the spend caps, while
-/// failures only stop us from retrying a genuinely broken session forever —
-/// a transient blip must NOT consume the night's budget.
-struct NightLedger {
-    let key: String
-    let counts: [String: Int]    // successful resumes per session
-    let failures: [String: Int]  // failed attempts per session
+/// Ledger of unattended resumes, persisted so relaunching can't bypass the
+/// caps. Two different budgets:
+///   • a DAILY total (10 by default), keyed by the local calendar day, and
+///   • per-STALL attempts (3 by default), keyed by `StalledSession.stallKey`
+///     and NOT reset at midnight: one stall gets three tries, full stop. (A
+///     headless resume doesn't clear Conductor's stalled flag, so a per-day
+///     count would re-run the same finished session every day.)
+/// Successes and failures are tracked separately: successes spend the caps,
+/// failures only stop us retrying a genuinely broken stall forever.
+struct ResumeLedger {
+    let key: String              // local day of `dayTotal`
+    let dayTotal: Int            // successful unattended resumes today
+    let counts: [String: Int]    // successful resumes per stall
+    let failures: [String: Int]  // failed attempts per stall
+    /// Last successful resume per stall, so the cool-down survives a relaunch.
+    let lastResumed: [String: Date]
 
-    init(key: String, counts: [String: Int] = [:], failures: [String: Int] = [:]) {
+    init(key: String, dayTotal: Int = 0, counts: [String: Int] = [:], failures: [String: Int] = [:],
+         lastResumed: [String: Date] = [:]) {
         self.key = key
+        self.dayTotal = dayTotal
         self.counts = counts
         self.failures = failures
+        self.lastResumed = lastResumed
     }
 
-    var total: Int { counts.values.reduce(0, +) } // successful resumes tonight
+    var total: Int { dayTotal }
 
-    func count(for sessionID: String) -> Int { counts[sessionID] ?? 0 }
-    func failureCount(for sessionID: String) -> Int { failures[sessionID] ?? 0 }
+    func count(for stallKey: String) -> Int { counts[stallKey] ?? 0 }
+    func failureCount(for stallKey: String) -> Int { failures[stallKey] ?? 0 }
 
-    func recordingSuccess(_ sessionID: String) -> NightLedger {
+    func recordingSuccess(_ stallKey: String, at date: Date = Date()) -> ResumeLedger {
         var updated = counts
-        updated[sessionID, default: 0] += 1
-        return NightLedger(key: key, counts: updated, failures: failures)
+        updated[stallKey, default: 0] += 1
+        var last = lastResumed
+        last[stallKey] = date
+        return ResumeLedger(key: key, dayTotal: dayTotal + 1, counts: updated,
+                            failures: failures, lastResumed: last)
     }
 
-    func recordingFailure(_ sessionID: String) -> NightLedger {
+    func recordingFailure(_ stallKey: String) -> ResumeLedger {
         var updated = failures
-        updated[sessionID, default: 0] += 1
-        return NightLedger(key: key, counts: counts, failures: updated)
+        updated[stallKey, default: 0] += 1
+        return ResumeLedger(key: key, dayTotal: dayTotal, counts: counts,
+                            failures: updated, lastResumed: lastResumed)
     }
 
-    static func currentKey(now: Date = Date(), startHour: Int, calendar: Calendar = .current) -> String {
-        let hour = calendar.component(.hour, from: now)
-        let anchor = hour >= startHour ? now : now.addingTimeInterval(-86_400)
-        // Format the date in the SAME (local) calendar used for the hour.
-        // `.iso8601` formats in UTC, which in negative-offset zones rolls
-        // the date over at local midnight and silently resets the caps.
-        let c = calendar.dateComponents([.year, .month, .day], from: anchor)
+    /// The local calendar day. Formatted in the SAME calendar as the date
+    /// (`.iso8601` would format in UTC and roll the day at the wrong hour).
+    static func currentKey(now: Date = Date(), calendar: Calendar = .current) -> String {
+        let c = calendar.dateComponents([.year, .month, .day], from: now)
         return String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
     }
 
-    static func load(startHour: Int, defaults: UserDefaults = .standard) -> NightLedger {
-        let key = currentKey(startHour: startHour)
-        guard defaults.string(forKey: "nightKey") == key else {
-            return NightLedger(key: key) // new night, fresh budget
+    /// A new day resets only the daily total. Per-stall entries are kept
+    /// until the stall itself is too old to matter.
+    static func load(now: Date = Date(), defaults: UserDefaults = .standard) -> ResumeLedger {
+        let key = currentKey(now: now)
+        let sameDay = defaults.string(forKey: "ledgerDay") == key
+        let last = (defaults.dictionary(forKey: "ledgerLastResumed") as? [String: Date] ?? [:])
+            .filter { now.timeIntervalSince($0.value) < StalledSession.maxAge }
+        let live = Set(last.keys)
+        let keep: ([String: Int]) -> [String: Int] = { dict in
+            // Drop entries for stalls with no recent resume and no failures worth keeping.
+            dict.count > 500 ? dict.filter { live.contains($0.key) } : dict
         }
-        return NightLedger(
+        return ResumeLedger(
             key: key,
-            counts: defaults.dictionary(forKey: "nightCounts") as? [String: Int] ?? [:],
-            failures: defaults.dictionary(forKey: "nightFailures") as? [String: Int] ?? [:]
+            dayTotal: sameDay ? defaults.integer(forKey: "ledgerDayTotal") : 0,
+            counts: keep(defaults.dictionary(forKey: "ledgerCounts") as? [String: Int] ?? [:]),
+            failures: keep(defaults.dictionary(forKey: "ledgerFailures") as? [String: Int] ?? [:]),
+            lastResumed: last
         )
     }
 
     func save(defaults: UserDefaults = .standard) {
-        defaults.set(key, forKey: "nightKey")
-        defaults.set(counts, forKey: "nightCounts")
-        defaults.set(failures, forKey: "nightFailures")
+        defaults.set(key, forKey: "ledgerDay")
+        defaults.set(dayTotal, forKey: "ledgerDayTotal")
+        defaults.set(counts, forKey: "ledgerCounts")
+        defaults.set(failures, forKey: "ledgerFailures")
+        defaults.set(lastResumed, forKey: "ledgerLastResumed")
+    }
+}
+
+/// Unattended resumes not yet reported to the user, persisted so a relaunch
+/// mid-run still ends in one honest "Resumed 3 stalled sessions" note.
+/// Counts distinct sessions, not attempts: re-resuming one session three
+/// times is one session.
+enum ResumeSummary {
+    struct Pending: Equatable { let count: Int; let title: String?; let background: Int }
+    private static let keysKey = "summaryKeys"
+    private static let backgroundKeysKey = "summaryBackgroundKeys"
+    private static let titleKey = "summaryTitle"
+
+    static func recordUnattended(key: String, title: String, inApp: Bool, defaults: UserDefaults = .standard) {
+        func add(_ k: String) {
+            var keys = Set(defaults.stringArray(forKey: k) ?? [])
+            keys.insert(key)
+            defaults.set(Array(keys), forKey: k)
+        }
+        add(keysKey)
+        if !inApp { add(backgroundKeysKey) }
+        defaults.set(title, forKey: titleKey)
+    }
+
+    /// Returns what's pending and clears it, or nil when nothing is.
+    static func takeIfAny(defaults: UserDefaults = .standard) -> Pending? {
+        let keys = defaults.stringArray(forKey: keysKey) ?? []
+        guard !keys.isEmpty else { return nil }
+        let pending = Pending(count: keys.count, title: defaults.string(forKey: titleKey),
+                              background: (defaults.stringArray(forKey: backgroundKeysKey) ?? []).count)
+        [keysKey, backgroundKeysKey, titleKey].forEach { defaults.removeObject(forKey: $0) }
+        return pending
     }
 }

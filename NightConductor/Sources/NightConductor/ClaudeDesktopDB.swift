@@ -11,7 +11,7 @@ enum ClaudeDesktopDB {
             + "/Library/Application Support/Claude/local-agent-mode-sessions"
     }
 
-    private static let maxStallAge: TimeInterval = 48 * 3600
+    private static let maxStallAge = StalledSession.maxAge
 
     static func findStalledSessions(
         root: String = sessionsRoot, now: Date = Date()
@@ -43,7 +43,8 @@ enum ClaudeDesktopDB {
     }
 
     private static func parse(metaURL: URL, now: Date, fm: FileManager) -> StalledSession? {
-        guard let data = try? Data(contentsOf: metaURL),
+        guard SafeFile.isRegularNonSymlink(metaURL),
+              let data = SafeFile.readAll(metaURL, maxBytes: 262_144),
               let meta = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
         if meta["isArchived"] as? Bool == true { return nil }
@@ -54,6 +55,7 @@ enum ClaudeDesktopDB {
 
         // audit.jsonl lives in a sibling dir named after the session id.
         let sessionId = (meta["sessionId"] as? String) ?? metaURL.deletingPathExtension().lastPathComponent
+        guard ResumeSafety.isSafePathComponent(sessionId) else { return nil }
         let auditURL = metaURL.deletingLastPathComponent()
             .appendingPathComponent(sessionId).appendingPathComponent("audit.jsonl")
         guard let stall = stallSignal(auditURL: auditURL) else { return nil }
@@ -78,7 +80,11 @@ enum ClaudeDesktopDB {
     /// session ended at a limit. Conservative: a successful `result` after
     /// the limit clears it.
     private static func stallSignal(auditURL: URL) -> (text: String, at: Date)? {
-        guard let content = try? String(contentsOf: auditURL, encoding: .utf8) else { return nil }
+        // Only the tail matters (last 40 events), and only from a real file:
+        // a FIFO or a huge log must not stall the 30-second loop.
+        guard SafeFile.isRegularNonSymlink(auditURL),
+              let tail = SafeFile.readTail(auditURL, maxBytes: 131_072) else { return nil }
+        let content = String(decoding: tail, as: UTF8.self)
         let lines = content.split(separator: "\n").suffix(40)
         var stall: (text: String, at: Date)?
         for line in lines {

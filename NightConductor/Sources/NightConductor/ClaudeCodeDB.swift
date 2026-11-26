@@ -11,7 +11,7 @@ import Foundation
 enum ClaudeCodeDB {
     static var projectsRoot: String { NSHomeDirectory() + "/.claude/projects" }
 
-    private static let maxStallAge: TimeInterval = 48 * 3600
+    private static let maxStallAge = StalledSession.maxAge
     private static let tailBytes = 131_072  // 128KB: keep the limit error in view past large trailing tool output
     private static let headBytes = 16_000
     private static let maxDirsScanned = 120  // bound cost: at most this many project dirs
@@ -96,7 +96,7 @@ enum ClaudeCodeDB {
 
         // Stalled iff the last model turn ended in a usage-limit error.
         guard let last = lastAssistant, last.isError,
-              last.status == 429 || last.text.localizedCaseInsensitiveContains("limit")
+              last.status == 429 || isUsageLimitText(last.text)
         else { return nil }
         if now.timeIntervalSince(last.ts) > maxStallAge { return nil }
 
@@ -152,6 +152,15 @@ enum ClaudeCodeDB {
 
     /// "-Users-me-Code-MyApp" → "/Users/me/Code/MyApp".
     /// Lossy for real dashes; only a fallback when the jsonl has no cwd.
+    /// A usage or rate limit, not any error mentioning "limit" (a context
+    /// limit is not something waiting will fix).
+    static func isUsageLimitText(_ text: String) -> Bool {
+        let t = text.lowercased()
+        if t.contains("context") { return false }
+        return ["usage limit", "rate limit", "limit reached", "hit your limit",
+                "limit will reset", "5-hour limit", "weekly limit"].contains { t.contains($0) }
+    }
+
     private static func decodeProjectDir(_ name: String) -> String {
         "/" + name.drop(while: { $0 == "-" }).replacingOccurrences(of: "-", with: "/")
     }
@@ -159,6 +168,7 @@ enum ClaudeCodeDB {
     // MARK: - Efficient partial reads
 
     private static func tail(_ url: URL, maxBytes: Int) -> [String] {
+        guard SafeFile.isRegularNonSymlink(url) else { return [] } // a FIFO would block forever
         guard let handle = try? FileHandle(forReadingFrom: url) else { return [] }
         defer { try? handle.close() }
         let size = (try? handle.seekToEnd()) ?? 0

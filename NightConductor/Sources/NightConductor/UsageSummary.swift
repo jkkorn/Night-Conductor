@@ -18,6 +18,7 @@ enum UsageSummary {
             let name = row.usage.provider.displayName
             switch PaceStatus.of(row.usage, row.assessment, now: now) {
             case .onPace, .unknown: onTrack.append(name)
+            case .atLimit: problems.append("\(name) is at its weekly limit.")
             case .close: problems.append("\(name) is cutting it close.")
             case .ahead: problems.append("\(name) is ahead of pace.")
             case .runsOut: problems.append("\(name) will run out before it resets.")
@@ -43,6 +44,7 @@ enum UsageSummary {
 
     static func urgency(_ status: PaceStatus) -> Int {
         switch status {
+        case .atLimit: return 6
         case .burningHot: return 5
         case .runsOut: return 4
         case .ahead: return 3
